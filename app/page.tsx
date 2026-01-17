@@ -131,9 +131,7 @@ export default function Home() {
                 <p className="text-sm text-gray-600">
                   {session.user?.email}
                 </p>
-                {(session as any).accessToken && (
-                  <p className="text-xs text-green-600 font-semibold mt-1">✓ Scopes Verified</p>
-                )}
+
               </div>
             </div>
             
