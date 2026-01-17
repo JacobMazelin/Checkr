@@ -3,7 +3,6 @@ node_modules/
 venv/
 env/
 __pycache__/
-frontend/node_modules/
 *.pyc
 *.pyo
 
@@ -28,14 +27,14 @@ build/
 *.o
 *.a
 *.so
+.next/
 
 # Logs
 *.log
 npm-debug.log*
 
 # Misc
-.DS_Store
 *.tmp
 
-frontend/.next/
-frontend/node_modules/
+# Old frontend directory (keep for reference or delete manually)
+frontend/

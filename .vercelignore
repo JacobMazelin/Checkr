@@ -1,1 +1,10 @@
-# .vercelignore
+venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+frontend/
+advanced-imessage-kit/
+http-proxy/
+.DS_Store
+*.log

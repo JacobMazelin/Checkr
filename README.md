@@ -1,143 +1,193 @@
-# Next.js + FastAPI Hello World
+# Next.js + FastAPI on Vercel
 
-A simple full-stack application with a Next.js frontend and FastAPI backend.
+A full-stack application combining Next.js (frontend) with FastAPI (backend) deployed as serverless functions on Vercel.
 
 ## Project Structure
 
 ```
 .
-├── backend/           # FastAPI backend
-│   ├── main.py       # Main FastAPI application
-│   └── requirements.txt
-├── frontend/         # Next.js frontend
-│   ├── app/
-│   │   └── page.tsx  # Main page with API integration
-│   └── package.json
-├── vercel.json       # Vercel deployment configuration
-└── .vercelignore     # Files to ignore during deployment
+├── app/                  # Next.js App Router pages
+│   ├── layout.tsx       # Root layout
+│   └── page.tsx         # Home page
+├── api/                 # FastAPI backend (deployed as Vercel Functions)
+│   └── index.py         # Main FastAPI application
+├── public/              # Static assets
+├── next.config.ts       # Next.js configuration
+├── package.json         # Node.js dependencies
+├── requirements.txt     # Python dependencies
+└── vercel.json         # Vercel deployment configuration
 ```
 
-## Prerequisites
+## Tech Stack
 
-- Python 3.8+
-- Node.js 18+
-- npm or yarn
+- **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS
+- **Backend**: FastAPI (Python 3.12), deployed as Vercel Serverless Functions
+- **Deployment**: Vercel (both frontend and backend)
 
-## Backend Setup (FastAPI)
+## Local Development
 
-1. Navigate to the backend directory:
-   ```bash
-   cd backend
-   ```
+### Prerequisites
 
-2. Create a virtual environment:
+- Node.js 18+ and npm
+- Python 3.12+ (or 3.8+)
+- Vercel CLI (optional but recommended)
+
+### Backend Setup (FastAPI)
+
+1. Create and activate a virtual environment:
    ```bash
    python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
-3. Activate the virtual environment:
-   - On macOS/Linux:
-     ```bash
-     source venv/bin/activate
-     ```
-   - On Windows:
-     ```bash
-     venv\Scripts\activate
-     ```
-
-4. Install dependencies:
+2. Install Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-5. Run the FastAPI server:
+3. Run the FastAPI development server:
    ```bash
-   uvicorn api.index:app --reload
+   uvicorn api.index:app --reload --port 8000
    ```
 
-   The backend will be available at `http://localhost:8000`
+   The API will be available at `http://localhost:8000/api`
 
-## Frontend Setup (Next.js)
+### Frontend Setup (Next.js)
 
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
-
-2. Install dependencies:
+1. Install Node.js dependencies:
    ```bash
    npm install
    ```
 
-3. Run the development server:
+2. Run the Next.js development server:
    ```bash
    npm run dev
    ```
 
    The frontend will be available at `http://localhost:3000`
 
-## Using the Application
+### Using Vercel CLI (Recommended)
 
-1. Start the FastAPI backend (on port 8000)
-2. Start the Next.js frontend (on port 3000)
-3. Open your browser to `http://localhost:3000`
-4. You should see two cards displaying messages from the FastAPI backend
+The easiest way to run both frontend and backend together locally:
+
+```bash
+npm install -g vercel
+vercel dev
+```
+
+This will automatically:
+- Start the Next.js dev server
+- Run the FastAPI backend as a serverless function
+- Handle routing between frontend and API
 
 ## API Endpoints
 
-- `GET /` - Returns a hello world message
-- `GET /api/hello` - Returns a message from the API endpoint
+All API routes are prefixed with `/api`:
+
+- `GET /api` - Root endpoint, returns a hello world message
+- `GET /api/hello` - Hello endpoint, returns a greeting message
 
 ## Deployment to Vercel
 
-The application is configured to deploy the Next.js frontend to Vercel. The backend is ignored during Vercel deployment (configured in `.vercelignore`).
+### Automatic Deployment (Recommended)
 
-### Deploying the Frontend
+1. Push your code to GitHub, GitLab, or Bitbucket
+2. Import your repository in Vercel: https://vercel.com/new
+3. Vercel will automatically detect Next.js and deploy both frontend and API
 
-1. Install Vercel CLI:
-   ```bash
-   npm i -g vercel
-   ```
+### Manual Deployment via CLI
 
-2. Deploy to Vercel:
-   ```bash
-   vercel
-   ```
+```bash
+vercel --prod
+```
 
-   Or connect your GitHub repository to Vercel for automatic deployments.
+### Environment Variables
 
-### Important Notes for Deployment
+If you need environment variables:
 
-- The `vercel.json` is configured to build the Next.js app from the `frontend` subdirectory
-- The backend directory is ignored during Vercel deployment
-- For production, you'll need to deploy the FastAPI backend separately (e.g., on Railway, Render, or AWS)
-- Update the API endpoint URLs in `frontend/app/page.tsx` to point to your deployed backend
+1. Create a `.env.local` file for local development
+2. Add variables in Vercel Dashboard for production
 
-### Deploying the Backend
+## How It Works
 
-For the FastAPI backend, consider these options:
-- **Railway**: Easy Python deployment with PostgreSQL support
-- **Render**: Free tier available for Python apps
-- **AWS Lambda**: Serverless deployment with AWS API Gateway
-- **Google Cloud Run**: Container-based serverless deployment
+### Vercel's Python Runtime
 
-## Tech Stack
+- Vercel automatically detects Python files in the `api/` directory
+- The `api/index.py` file exports a `app` variable (FastAPI instance)
+- FastAPI routes are automatically converted to Vercel Serverless Functions
+- Each request spawns a serverless function instance
 
-- **Frontend**: Next.js 15, React 19, TypeScript, Tailwind CSS
-- **Backend**: FastAPI, Python, Uvicorn
-- **Communication**: REST API with CORS enabled
+### Next.js Rewrites
+
+During development, `next.config.ts` rewrites `/api/*` requests to `http://localhost:8000/api/*` (your local FastAPI server).
+
+In production, Vercel automatically routes `/api/*` to the Python serverless functions.
+
+### CORS Configuration
+
+The FastAPI app includes CORS middleware to allow requests from any origin. In production, you should restrict this to your actual domain:
+
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://your-domain.vercel.app"],
+    # ...
+)
+```
 
 ## Troubleshooting
 
-### 404 Error on Vercel
+### 404 Errors on API Routes
 
-If you encounter a 404 error on Vercel, ensure:
-1. The `vercel.json` file is present in the root directory
-2. The `frontend/package.json` exists
-3. The build and output directories are correctly configured in `vercel.json`
+- Ensure `api/index.py` exists and exports an `app` variable
+- Check that routes include the `/api` prefix
+- Verify `vercel.json` has the correct rewrites configuration
 
-### CORS Issues
+### CORS Errors
 
-If you encounter CORS issues in production:
-1. Update the CORS origins in `backend/main.py` to include your Vercel domain
-2. Example: `allow_origins=["https://your-app.vercel.app"]`
+- Check the CORS middleware configuration in `api/index.py`
+- Ensure your frontend domain is in the `allow_origins` list
+
+### Build Failures
+
+- Check Python dependencies are listed in `requirements.txt`
+- Ensure Node.js dependencies are in `package.json`
+- Review Vercel build logs for specific errors
+
+## Project Configuration Files
+
+### vercel.json
+
+```json
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
+    }
+  ]
+}
+```
+
+This ensures API routes are properly handled by Vercel's routing system.
+
+### requirements.txt
+
+Lists Python dependencies. FastAPI is the only required dependency for the backend:
+
+```
+fastapi==0.115.0
+```
+
+Note: `uvicorn` is not needed as Vercel provides its own ASGI server.
+
+## Additional Resources
+
+- [Vercel Python Runtime Documentation](https://vercel.com/docs/functions/runtimes/python)
+- [FastAPI on Vercel Guide](https://vercel.com/docs/frameworks/backend/fastapi)
+- [Next.js Documentation](https://nextjs.org/docs)
+- [FastAPI Documentation](https://fastapi.tiangolo.com/)
+
+## License
+
+MIT
