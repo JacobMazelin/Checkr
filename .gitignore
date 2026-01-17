@@ -36,3 +36,6 @@ npm-debug.log*
 # Misc
 .DS_Store
 *.tmp
+
+frontend/.next/
+frontend/node_modules/
