@@ -17,7 +17,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           ].join(" ")
         }
       }
-    })
+    }) // add more providers here
   ],
   callbacks: {
     async jwt({ token, account }) {
