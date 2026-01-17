@@ -53,6 +53,7 @@
     ],
     "devDependencies": {
         "@biomejs/biome": "^2.3.3",
+        "@leanmcp/cli": "^0.4.5",
         "@types/bun": "latest",
         "tsup": "^8.3.5"
     },
@@ -70,12 +71,13 @@
     },
     "dependencies": {
         "@anthropic-ai/sdk": "^0.71.2",
+        "@modelcontextprotocol/sdk": "^1.25.2",
         "@types/node": "^25.0.9",
         "@types/ws": "^8.18.1",
         "axios": "^1.13.2",
         "dotenv": "^17.2.3",
         "elevenlabs": "^1.59.0",
-        "form-data": "^4.0.4",
+        "form-data": "^4.0.5",
         "reflect-metadata": "^0.2.2",
         "socket.io-client": "^4.8.1",
         "ws": "^8.19.0"
