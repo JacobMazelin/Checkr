@@ -12,6 +12,10 @@
   ],
   "routes": [
     {
+      "src": "/api/auth/(.*)",
+      "dest": "/api/auth/$1"
+    },
+    {
       "src": "/api/(.*)",
       "dest": "/api"
     },
