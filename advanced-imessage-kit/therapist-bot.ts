@@ -26,11 +26,14 @@ async function main() {
     });
 
     sdk.on("new-message", async (message) => {
-        // Skip messages from self
-        if (message.isFromMe) return;
+        const userText = message.text || message.attributedBody?.[0]?.string || "";
 
-        console.log(`\nReceived: ${message.text || "(no text)"}`);
-        console.log(`From: ${message.handle?.address || "unknown"}`);
+        // Skip messages from self (unless testing with /therapist prefix)
+        const isTestMessage = message.isFromMe && userText.toLowerCase().startsWith("/therapist");
+        if (message.isFromMe && !isTestMessage) return;
+
+        console.log(`\nReceived: ${userText || "(no text)"}`);
+        console.log(`From: ${message.handle?.address || "unknown"} (isFromMe: ${message.isFromMe})`);
 
         const chat = message.chats?.[0];
         if (!chat) return;
