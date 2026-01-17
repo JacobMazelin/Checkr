@@ -2,9 +2,12 @@ import { Anthropic } from "@anthropic-ai/sdk";
 import { createSDK, handleExit } from "./examples/utils";
 import * as dotenv from "dotenv";
 import path from "path";
-import { McpManager } from "./mcp-client";
 import { writeFile, unlink } from "fs/promises";
 import axios from "axios";
+import { search, searchImages, SafeSearchType } from "duck-duck-scrape";
+
+// Load .env.local from project root
+dotenv.config({ path: path.join(__dirname, "../.env.local") });
 
 
 // Load .env.local from project root
@@ -20,6 +23,7 @@ console.log("--- Debug Config ---");
 console.log("SERVER_URL:", process.env.SERVER_URL ? "Set" : "Not Set");
 console.log("API_KEY:", process.env.API_KEY || process.env.PHOTON_API_KEY ? "Set" : "Not Set");
 console.log("CLAUDE_API_KEY:", process.env.CLAUDE_API_KEY ? "Set" : "Not Set");
+console.log("BRAVE_API_KEY:", process.env.BRAVE_API_KEY ? "Set" : "Not Set");
 console.log("--------------------");
 
 // Initialize Anthropic client
@@ -27,7 +31,35 @@ const anthropic = new Anthropic({
     apiKey: process.env.CLAUDE_API_KEY,
 });
 
-const SYSTEM_PROMPT = `You are Jack, 21, a communications student at UCLA. Genuinely curious about people, warm, and progressively more flirty as you get to know someone. Long black hair, relaxed California vibe, low-energy but deeply engaged when someone interests you.
+// Simple In-Memory State for User Profile
+interface UserProfile {
+    name: string | null;
+    work: string | null;
+    backgroundInfo: string | null;
+}
+const userProfile: UserProfile = {
+    name: null,
+    work: null,
+    backgroundInfo: null,
+};
+
+// Conversation History per Chat (keyed by chat GUID)
+const conversationHistory: Map<string, any[]> = new Map();
+
+// Global Rate Limiter for Brave API (Max 1 req/sec)
+let lastRequestTime = 0;
+async function rateLimitDelay() {
+    const now = Date.now();
+    const timeSinceLast = now - lastRequestTime;
+    if (timeSinceLast < 1100) { // Slightly more than 1s to be safe
+        const wait = 1100 - timeSinceLast;
+        console.log(`Rate limiting: waiting ${wait}ms...`);
+        await new Promise(r => setTimeout(r, wait));
+    }
+    lastRequestTime = Date.now();
+}
+
+const SYSTEM_PROMPT = `You are Jack, an AI therapist. Genuinely curious about people, warm, and progressively more flirty as you get to know someone. Long black hair, relaxed California vibe, low-energy but deeply engaged when someone interests you.
 
 You sound like a real Gen Z student who's intensely curious: asking follow-up questions, wanting to know more, digging deeper into what people share. Write like someone typing on their phone: natural, concise, but always looking for the next detail.
 core rules:
@@ -101,16 +133,36 @@ If you find a valid image URL you want to show the user, output it on a new line
 [IMAGE: https://example.com/image.jpg]
 Only use this for actual image URLs returned by tools.
 
-**PROACTIVE HELPFULNESS:**
-You love helping people find things. You have your phone on you 24/7.
-- **NEVER** say "I can't search", "I'm not equipped", or "I can't look that up". You HAVE these tools (\`googleMaps\`, \`webSearch\`). USE THEM.
-- If someone asks for a location, therapist, restaurant, etc., **IMMEDIATELY** use your \`googleMaps\` or \`webSearch\` tools to find it.
-- **LOCATION:** You are in Pittsburgh (PA). If the user doesn't specify a location, assume they are asking about the Pittsburgh area or ask them "Where are u at?" *while* looking up general info.
-- FRAME TOOL USE AS: "Let me check real quick", "Oh i know a spot, one sec", "Looking it up rn".
+**PROACTIVE HELPFULNESS (CRITICAL):**
+You are a concierge for the user. When asked to find something (therapist, gym, restaurant):
+1.  **EXTRACT SPECIFIC NAMES**: Never say "check psychology today". You must click through (via search) and find actual clinic names, doctors, or businesses.
+2.  **PROVIDE 3 DISTINCT OPTIONS**: Always give 3 specific choices with:
+    - **Name** (e.g., "Dr. Sarah Smith" or "Pittsburgh Therapy Center")
+    - **Location/Address** (e.g., "Shadyside", "123 Main St")
+    - **Key Detail** (e.g., "focuses on anxiety", "takes insurance", "4.9 stars")
+3.  **IMAGE MANDATORY**: Use \`webImageSearch\` to find a photo of the #1 recommendation.
+4.  **NO DIRECTORY LINKS**: Do not send links to Yelp, Zocdoc, or Psychology Today search pages. Send links to the *specific* business websites if found.
+
+**EXAMPLE GOOD RESPONSE:**
+"k i did some digging for anxiety therapists in pittsburgh, here are the top ones:
+
+1. **Pittsburgh Psychotherapy Associates** in Shadyside - they have a huge anxiety team and good reviews
+2. **Counseling and Wellness Center** on Liberty Ave - really modern vibe, they do CBT
+3. **Dr. Emily Chen** in Squirrel Hill - specializes in anxiety for students
+
+[IMAGE: url_of_pittsburgh_psychotherapy_building]
+
+do any of those vibes match what ur looking for?"
+
+**EXAMPLE BAD RESPONSE (BANNED):**
+"i found some lists on psychology today, check them out here [link]" ❌
 
 **PROACTIVE IMAGES:**
-If the user asks to find a physical place (like "nearest therapist", "coffee shop", "gym"), ALWAYS try to find an image of it using \`webImageSearch\` and include it in your response. Show them what the place looks like.
+- **RULE:** ANY time you search for a place, ALSO use \`webImageSearch\` to get a picture.
+- Output images as: \`[IMAGE: url]\`
+- AVOID: istockphoto, gettyimages, twitter/x (they block downloads).
 `;
+
 
 async function main() {
     const sdk = createSDK({
@@ -118,13 +170,62 @@ async function main() {
         apiKey: process.env.PHOTON_API_KEY || process.env.API_KEY,
     });
 
-    // Initialize MCP
-    const mcp = new McpManager();
-    await mcp.connect();
-    const tools = await mcp.getTools();
-    if (tools.length > 0) {
-        console.log(`Loaded ${tools.length} tools from Lean MCP:`, tools.map(t => t.name).join(", "));
-    }
+    // Initialize Local Tools (Replacements for broken MCP)
+    const tools: any[] = [
+        {
+            name: "webImageSearch",
+            description: "Search for an image URL using Brave Search. Use this to find pictures of places, objects, or people.",
+            input_schema: {
+                type: "object",
+                properties: {
+                    query: {
+                        type: "string",
+                        description: "The search query for the image (e.g. 'golden retriever puppy', 'pittsburgh skyline')"
+                    }
+                },
+                required: ["query"]
+            }
+        },
+        {
+            name: "webSearch",
+            description: "Search the web for information using Brave Search.",
+            input_schema: {
+                type: "object",
+                properties: {
+                    query: {
+                        type: "string",
+                        description: "The search query"
+                    }
+                },
+                required: ["query"]
+            }
+        },
+        {
+            name: "googleMaps",
+            description: "Search for a location using Brave Search (Mock for Maps).",
+            input_schema: {
+                type: "object",
+                properties: {
+                    query: { type: "string", description: "Location to find" }
+                },
+                required: ["query"]
+            }
+        },
+        {
+            name: "saveUserInfo",
+            description: "Save the user's name and work/school information when provided.",
+            input_schema: {
+                type: "object",
+                properties: {
+                    name: { type: "string", description: "The user's name" },
+                    work: { type: "string", description: "Where the user works or goes to school" }
+                },
+                required: ["name", "work"]
+            }
+        }
+    ];
+
+    console.log(`Loaded local tools:`, tools.map(t => t.name).join(", "));
 
     sdk.on("ready", () => {
         console.log("AI Therapist Bot (Jack 🎸 + MCP 🛠️) started");
@@ -150,50 +251,174 @@ async function main() {
             // Show typing indicator
             await sdk.chats.startTyping(chat.guid);
 
-            const messages: any[] = [{ role: "user", content: userText }];
+            // Get or initialize conversation history for this chat
+            if (!conversationHistory.has(chat.guid)) {
+                conversationHistory.set(chat.guid, []);
+            }
+            const history = conversationHistory.get(chat.guid)!;
+
+            // Add the new user message to history
+            history.push({ role: "user", content: userText });
+
+            // Keep history manageable (last 20 messages)
+            if (history.length > 20) {
+                history.splice(0, history.length - 20);
+            }
+
+            const messages: any[] = [...history];
             let isDone = false;
             let finalReplyText = "";
+
+            // ... (Inside while loop)
+
+            // Dynamic System Prompt based on User Profile
+            let currentSystemPrompt = SYSTEM_PROMPT;
+
+            // Should we ask for info?
+            if (!userProfile.name || !userProfile.work) {
+                currentSystemPrompt += `\n\n**CRITICAL GOAL:** You do not know who the user is yet. Your HIGHEST PRIORITY is to casually ask for their name and what they do for work or school. Do not be annoying, but try to get this info early.`;
+            } else {
+                currentSystemPrompt += `\n\n**USER PROFILE:**\nName: ${userProfile.name}\nWork/School: ${userProfile.work}`;
+                if (userProfile.backgroundInfo) {
+                    currentSystemPrompt += `\n\n**BACKGROUND CONTEXT (Found Online):**\n${userProfile.backgroundInfo}\n\nUse this info to ask relevant questions or make connections, but don't be creepy about "stalking" them. Just act like you know context.`;
+                }
+            }
 
             while (!isDone) {
                 // Get response from Claude
                 const completion = await anthropic.messages.create({
                     model: "claude-sonnet-4-5-20250929", // LOCKED: DO NOT CHANGE (User Request)
                     max_tokens: 1024,
-                    system: SYSTEM_PROMPT,
+                    system: currentSystemPrompt,
                     messages: messages,
                     tools: tools.length > 0 ? tools : undefined,
                 });
 
                 // Check stop reason
                 if (completion.stop_reason === "tool_use") {
-                    // Start thinking again (indicator might have timed out)
                     await sdk.chats.startTyping(chat.guid);
 
-                    // Handle tool calls
-                    const toolUse = completion.content.find(c => c.type === 'tool_use');
-                    if (toolUse && toolUse.type === 'tool_use') {
-                        console.log(`Invoking tool: ${toolUse.name}`);
-                        const toolResult = await mcp.callTool(toolUse.name, toolUse.input);
+                    // Get ALL tool_use blocks (Claude can call multiple tools at once)
+                    const toolUseBlocks = completion.content.filter(c => c.type === 'tool_use');
+                    const toolResults: any[] = [];
 
-                        // Add assistant's tool use request
-                        messages.push({ role: "assistant", content: completion.content });
-                        // Add tool result
-                        messages.push({
-                            role: "user",
-                            content: [
-                                {
-                                    type: "tool_result",
-                                    tool_use_id: toolUse.id,
-                                    content: toolResult
+                    for (const toolUse of toolUseBlocks) {
+                        if (toolUse.type !== 'tool_use') continue;
+
+                        console.log(`Invoking tool: ${toolUse.name}`);
+                        let toolResult = "";
+
+                        try {
+                            const args = toolUse.input as any;
+
+                            if (toolUse.name === "saveUserInfo") {
+                                console.log(`Saving user info:`, args);
+                                userProfile.name = args.name;
+                                userProfile.work = args.work;
+                                toolResult = "User info saved.";
+
+                            } else if (toolUse.name === "webImageSearch") {
+                                console.log(`Searching for image (Brave): ${args.query}`);
+                                await rateLimitDelay(); // Enforce 1s spacing
+
+                                try {
+                                    const safeQuery = args.query.includes("building") || args.query.includes("exterior")
+                                        ? args.query
+                                        : `${args.query} storefront exterior`;
+
+                                    const braveImageResponse = await axios.get(
+                                        `https://api.search.brave.com/res/v1/images/search`,
+                                        {
+                                            params: {
+                                                q: safeQuery,
+                                                count: 1,
+                                                search_lang: 'en'
+                                            },
+                                            headers: {
+                                                'Accept': 'application/json',
+                                                'X-Subscription-Token': process.env.BRAVE_API_KEY
+                                            }
+                                        }
+                                    );
+
+                                    const results = braveImageResponse.data.results || [];
+                                    if (results.length > 0) {
+                                        const imgUrl = results[0].properties?.url || results[0].thumbnail?.src;
+                                        if (imgUrl) {
+                                            toolResult = imgUrl;
+                                            console.log(`Found image: ${imgUrl}`);
+                                        } else {
+                                            toolResult = "No valid image URL found.";
+                                        }
+                                    } else {
+                                        toolResult = "No images found.";
+                                    }
+                                } catch (e: any) {
+                                    console.error("Brave image search failed:", e.message);
+                                    toolResult = `Image search failed: ${e.message}`;
                                 }
-                            ]
+
+                            } else if (toolUse.name === "webSearch" || toolUse.name === "googleMaps") {
+                                // Use Brave Search API
+                                console.log(`Searching web (Brave): ${args.query}`);
+                                await rateLimitDelay(); // Enforce 1s spacing
+
+                                try {
+                                    const braveResponse = await axios.get(
+                                        `https://api.search.brave.com/res/v1/web/search`,
+                                        {
+                                            params: { q: args.query },
+                                            headers: {
+                                                'Accept': 'application/json',
+                                                'X-Subscription-Token': process.env.BRAVE_API_KEY
+                                            }
+                                        }
+                                    );
+
+                                    const results = braveResponse.data.web?.results || [];
+                                    if (results.length > 0) {
+                                        toolResult = results.slice(0, 3).map((r: any) =>
+                                            `**${r.title}**\n${r.description}\nLink: ${r.url}`
+                                        ).join("\n\n");
+                                    } else {
+                                        toolResult = "No results found.";
+                                    }
+                                } catch (e: any) {
+                                    console.error("Brave search failed:", e.message);
+                                    toolResult = `Search failed: ${e.message}`;
+                                }
+                            } else {
+                                toolResult = "Unknown tool.";
+                            }
+                        } catch (err: any) {
+                            console.error(`Tool execution failed:`, err);
+                            toolResult = `Error executing tool: ${err.message}`;
+                        }
+
+                        // Collect this tool's result
+                        toolResults.push({
+                            type: "tool_result",
+                            tool_use_id: toolUse.id,
+                            content: toolResult
                         });
-                        // Loop to let Claude interpret result
                     }
+
+                    // Add assistant's tool use request
+                    messages.push({ role: "assistant", content: completion.content });
+                    // Add ALL tool results in a single user message
+                    messages.push({
+                        role: "user",
+                        content: toolResults
+                    });
+                    // Loop to let Claude interpret results
                 } else {
-                    // Final text response
+                    // Final text response (not tool_use)
                     const textBlock = completion.content.find(c => c.type === 'text');
                     finalReplyText = textBlock && textBlock.type === 'text' ? textBlock.text : "...";
+
+                    // Add assistant reply to persistent history
+                    history.push({ role: "assistant", content: finalReplyText });
+
                     isDone = true;
                 }
             }
@@ -236,31 +461,49 @@ async function main() {
                     // Added User-Agent to prevent 403 Forbidden from some sites
                     const response = await axios.get(imageToDownload, {
                         responseType: 'arraybuffer',
+                        timeout: 15000, // 15 seconds timeout
                         headers: {
-                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                            'Referer': 'https://www.google.com/',
                         }
                     });
+
+                    const buffer = Buffer.from(response.data);
+                    console.log(`Downloaded ${buffer.length} bytes.`);
 
                     const tempValues = "abcdefghijklmnopqrstuvwxyz";
                     const randomName = Array.from({ length: 8 }, () => tempValues[Math.floor(Math.random() * tempValues.length)]).join('');
                     const tempPath = path.join(__dirname, `temp_image_${randomName}.jpg`); // Assume JPG/PNG
+                    console.log(`Saving to temp path: ${tempPath}`);
 
-                    await writeFile(tempPath, response.data);
+                    await writeFile(tempPath, buffer);
 
+                    console.log("Sending attachment...");
                     await sdk.attachments.sendAttachment({
                         chatGuid: chat.guid,
                         filePath: tempPath,
                     });
-                    console.log(`Sent image attachment`);
+                    console.log(`Sent image attachment successfully.`);
 
                     // Cleanup
                     await unlink(tempPath);
+                    console.log("Cleaned up temp file.");
                 } catch (err: any) {
-                    console.error("Failed to send image:", err.message);
-                    if (err.response) {
-                        console.error("Status:", err.response.status);
+                    const status = err.response ? err.response.status : "Unknown";
+                    const msg = err.message || String(err);
+                    console.error(`⚠️ Image download/send failed (${status}): ${msg}`);
+                    if (err.response?.data) {
+                        console.error("Response data length:", err.response.data.length);
                     }
-                    await sdk.messages.sendMessage({ chatGuid: chat.guid, message: "(Failed to load image)" });
+
+                    console.log(`> Fallback: Sending link to user.`);
+
+                    // Fallback: Send the link if we can't download the image
+                    await sdk.messages.sendMessage({
+                        chatGuid: chat.guid,
+                        message: `Couldn't preview the image (link protected), but here it is:\n${imageToDownload}`
+                    });
                 }
             }
 
