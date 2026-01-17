@@ -39,4 +39,3 @@ npm-debug.log*
 
 frontend/.next/
 frontend/node_modules/
-frontend/package-lock.json
