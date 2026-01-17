@@ -7,17 +7,6 @@ import { Shield, Zap, CheckCircle, LogOut } from 'lucide-react';
 export default function Home() {
   const { data: session, status } = useSession();
 
-  // Debug environment variables
-  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    console.log("✓ Google OAuth credentials loaded");
-    console.log("Client ID:", process.env.GOOGLE_CLIENT_ID?.substring(0, 20) + "...");
-  } else {
-    console.error("✗ Missing Google OAuth credentials!");
-    console.error("GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID ? "Set" : "Missing");
-    console.error("GOOGLE_CLIENT_SECRET:", process.env.GOOGLE_CLIENT_SECRET ? "Set" : "Missing");
-  }
-  
-
   if (status === "loading") {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
