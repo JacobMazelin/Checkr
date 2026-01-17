@@ -1,0 +1,15 @@
+# vercel.json
+{
+  "builds": [
+    {
+      "src": "backend/main.py",
+      "use": "vercel-python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/health",
+      "dest": "backend/main.py"
+    }
+  ]
+}
