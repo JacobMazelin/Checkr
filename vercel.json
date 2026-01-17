@@ -2,18 +2,18 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/index.py",
+      "src": "api/*.py",
       "use": "@vercel/python"
     },
     {
-      "src": "next.config.ts",
+      "src": "next.config.js",
       "use": "@vercel/next"
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "/api"
+      "dest": "/api/$1.py"
     },
     {
       "src": "/(.*)",
