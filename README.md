@@ -52,7 +52,7 @@ A simple full-stack application with a Next.js frontend and FastAPI backend.
 
 5. Run the FastAPI server:
    ```bash
-   uvicorn main:app --reload
+   uvicorn api.index:app --reload
    ```
 
    The backend will be available at `http://localhost:8000`
