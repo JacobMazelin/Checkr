@@ -19,14 +19,16 @@ export class GeneralTools {
   })
   async webSearch(input: WebSearchInput) {
     try {
-      console.log(`Searching DuckDuckGo for: ${input.query}`);
+      console.log(`[MCP Search Tool] Searching DuckDuckGo for: "${input.query}"`);
       const results = await search(input.query, {
         safeSearch: SafeSearchType.MODERATE
       });
 
+      console.log(`[MCP Search Tool] Found ${results?.results?.length || 0} results`);
+      
       if (!results.results || results.results.length === 0) {
         return {
-          content: [{ type: "text" as const, text: "No results found." }]
+          content: [{ type: "text" as const, text: "No results found for: " + input.query }]
         };
       }
 
@@ -39,7 +41,7 @@ export class GeneralTools {
         content: [{ type: "text" as const, text: formattedResults }]
       };
     } catch (error: any) {
-      console.error("DuckDuckGo search failed:", error);
+      console.error("[MCP Search Tool] DuckDuckGo search failed:", error.message);
       return {
         content: [{ type: "text" as const, text: `Search failed: ${error.message}` }]
       };

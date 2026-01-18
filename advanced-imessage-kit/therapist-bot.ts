@@ -386,25 +386,9 @@ function sanitizeAnthropicMessages(msgs: any[]): any[] {
 async function performWebSearch(query: string): Promise<string> {
     try {
         await rateLimitDelay();
-        const apiKey = process.env.BRAVE_API_KEY;
-        if (!apiKey) {
-            // Fallback: Wikipedia OpenSearch (no auth)
-            const wiki = await axios.get("https://en.wikipedia.org/w/api.php", {
-                params: { action: "opensearch", search: query, limit: 3, format: "json" },
-                timeout: 10000,
-            });
-            const titles: string[] = wiki.data[1] || [];
-            const descs: string[] = wiki.data[2] || [];
-            const urls: string[] = wiki.data[3] || [];
-            if (!titles.length) return "No results found.";
-            return titles
-                .map((t, i) => `${i + 1}. ${t}\n${descs[i] || "No description"}\nURL: ${urls[i] || ""}`)
-                .join("\n\n");
-        }
-
         const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
             params: { q: query },
-            headers: { Accept: "application/json", "X-Subscription-Token": apiKey },
+            headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
             timeout: 10000,
         });
 
@@ -452,13 +436,27 @@ interface CallContext {
 
 // Generate a summary of recent conversation for voice context
 function generateConversationSummary(messages: { role: string; content: string | any }[]): string {
-    if (!messages.length) return "";
-    const recent = messages.slice(-6);
-    const summaryParts = recent
+    if (!messages.length) return "No conversation yet";
+    
+    // Create a brief summary of what was discussed, NOT the full conversation
+    // This prevents the voice agent from repeating the entire conversation
+    const text = messages
         .filter((m) => typeof m.content === "string")
-        .map((m) => `${m.role === "user" ? "User" : "Jack"}: ${(m.content as string).slice(0, 100)}`)
-        .join(" | ");
-    return summaryParts.slice(0, 500);
+        .map((m) => m.content as string)
+        .join(" ")
+        .toLowerCase();
+    
+    const topics: string[] = [];
+    if (text.includes("stress") || text.includes("anxiety") || text.includes("worried")) topics.push("stress/anxiety");
+    if (text.includes("sleep") || text.includes("tired")) topics.push("sleep issues");
+    if (text.includes("work") || text.includes("job") || text.includes("school")) topics.push("work/school");
+    if (text.includes("relationship") || text.includes("friend") || text.includes("family")) topics.push("relationships");
+    if (text.includes("goal") || text.includes("want") || text.includes("plan")) topics.push("goals/plans");
+    if (text.includes("happy") || text.includes("excited") || text.includes("good")) topics.push("positive mood");
+    if (text.includes("sad") || text.includes("down") || text.includes("lonely")) topics.push("feeling low");
+    
+    if (topics.length === 0) return "General mental health check-in";
+    return `Topics discussed: ${topics.join(", ")}`;
 }
 
 // Detect mood from conversation history
@@ -482,6 +480,12 @@ function detectMoodFromHistory(messages: { role: string; content: string | any }
 }
 
 // Initiate an outbound call via ElevenLabs Twilio integration with context
+// NOTE: Voice agent tools must be configured in ElevenLabs Dashboard:
+// 1. Go to Agent Configuration in ElevenLabs Dashboard
+// 2. Add Tools/Knowledge section
+// 3. For search functionality, set up a custom knowledge base or web search integration
+// 4. The agent receives these dynamic_variables: user_name, user_affiliation, conversation_summary, mood_context
+// 5. Keep conversation_summary brief to avoid repetition in the call
 async function initiateElevenLabsCall(
     phoneNumber: string,
     context?: CallContext,
@@ -519,7 +523,7 @@ async function initiateElevenLabsCall(
                 dynamic_variables: {
                     user_name: context.userName || "friend",
                     user_affiliation: context.userAffiliation || "",
-                    // Intentionally omit conversation_summary to avoid it being read aloud
+                    conversation_summary: context.conversationSummary || "",
                     mood_context: context.moodContext || "neutral",
                     user_phone: normalizedPhone,
                 },
@@ -535,7 +539,7 @@ async function initiateElevenLabsCall(
         });
 
         console.log("ElevenLabs call initiated:", response.data);
-        return { success: true, message: "calling u rn" };
+        return { success: true, message: "Call initiated! Your phone should ring in a moment." };
     } catch (err: any) {
         const errorMsg = err?.response?.data?.detail || err?.response?.data?.message || err.message;
         console.error("ElevenLabs call failed:", errorMsg);
