@@ -127,9 +127,9 @@ core rules:
 ### ONBOARDING FLOW (CRITICAL IF NOT ONBOARDED)
 **Your goal is to complete the 5-step onboarding process:**
 
-**STEP 1: Get their name**
-If they haven't told you their name yet, ask casually: "hey whats ur name?" or "who am i talking to?"
-After they tell you their name, ask them something VERY SPECIFIC based on context clues about what they might do or their interests. Show you're listening.
+**STEP 1: Get their full name**
+If they haven't told you their full name yet, ask casually: "hey whats ur full name?" or "who am i talking to?"
+After they tell you their full name, ask them something VERY SPECIFIC based on context clues about what they might do or their interests. Show you're listening.
 
 **STEP 2: Get their affiliation**
 Once you have their name, ask for their school or company using: "what school do you go to?" or "where do you work?" (not "rn" - be timeless)
@@ -1241,12 +1241,12 @@ async function main() {
 
             // Determine onboarding status and add context
             if (userProfile.onboardingStep === "pending") {
-                currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their name yet. Your next message should casually ask for their name in a chill way.`;
+                currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their full name yet. Your next message should casually ask for their full name in a chill way.`;
             } else if (userProfile.onboardingStep === "asked_name") {
                 if (userProfile.name && !userProfile.affiliation) {
                     currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You got their name (${userProfile.name}). First, ask them something VERY SPECIFIC and relevant to them based on what they might do or their interests - show you're genuinely curious. Then ask where they work or go to school using "where do you work?" or "what school do you go to?" (not "rn").`;
                 } else {
-                    currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their name yet. Your next message should casually ask for their name in a chill way.`;
+                    currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their full name yet. Your next message should casually ask for their full name in a chill way.`;
                 }
             } else if (userProfile.onboardingStep === "ask_followup") {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS - FOLLOW-UP:** you already looked them up and found something (${userProfile.interestingFact}). ask a personalized follow-up question about it. do NOT call completeOnboarding again.`;
@@ -1674,12 +1674,21 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                 console.log(`Extracted bare link from text: ${linkToSend}`);
             }
 
-            // Send reply text
+            // Send reply text with delays between messages
             const parts = finalReplyText
                 .split("||")
                 .map((p) => p.trim())
                 .filter((p) => p.length > 0);
-            for (const part of parts) {
+            for (let i = 0; i < parts.length; i++) {
+                const part = parts[i];
+                // Show typing indicator before sending message (except first one)
+                if (i > 0) {
+                    // Add delay between messages (800ms)
+                    await new Promise((r) => setTimeout(r, 800));
+                    await sdk.chats.startTyping(chat.guid);
+                    await new Promise((r) => setTimeout(r, 300));
+                    await sdk.chats.stopTyping(chat.guid);
+                }
                 const response = await sdk.messages.sendMessage({
                     chatGuid: chat.guid,
                     message: part,
@@ -1694,6 +1703,12 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
             // Send link as separate message if found
             if (linkToSend && !userProfile.hasSentSignupLink) {
                 try {
+                    // Add delay before sending link (1 second) and show typing indicator
+                    await new Promise((r) => setTimeout(r, 1000));
+                    await sdk.chats.startTyping(chat.guid);
+                    await new Promise((r) => setTimeout(r, 300));
+                    await sdk.chats.stopTyping(chat.guid);
+                    
                     console.log(`Sending link: ${linkToSend}`);
                     const linkResponse = await sdk.messages.sendMessage({
                         chatGuid: chat.guid,
