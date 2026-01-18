@@ -1012,8 +1012,20 @@ async function main() {
 
                     // Get chat target
                     let chatGuid = cmd.chat_guid || cmd.query?.chat_guid;
-                    if (chatGuid && chatGuid.startsWith('+') && !chatGuid.includes(';')) {
-                        chatGuid = `iMessage;-;${chatGuid}`;
+                    if (chatGuid && !chatGuid.includes(';')) {
+                        // Clean up the number
+                        const clean = chatGuid.replace(/[^\d+]/g, '');
+                        // Check if it looks like a phone number
+                        if (clean.length >= 7) {
+                            // Ensure it starts with + if missing (defaulting to +1 if just 10 digits? Logic can be tricky. Let's just use what we have, prepending + if numeric only and no +)
+                            // But usually, if it starts with 1 and is 11 digits...
+                            // Let's just assume the input is correct number and prefix iMessage
+                            let formatted = clean;
+                            if (!formatted.startsWith('+')) formatted = '+' + formatted;
+
+                            chatGuid = `iMessage;-;${formatted}`;
+                            console.log(`Normalized chat GUID to: ${chatGuid}`);
+                        }
                     }
                     const target = chatGuid || lastActiveChatGuid;
 
