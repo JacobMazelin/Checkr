@@ -1064,6 +1064,36 @@ async function main() {
                         await sdk.messages.sendMessage({ chatGuid: target, message });
                         console.log("Sent custom text to", target);
 
+                    } else if (cmdType === 'image_search') {
+                        // Dedicated Image Search
+                        const query = cmd.query || '';
+                        console.log(`🖼️ Performing Image Search for: ${query}`);
+
+                        // Wait nicely (rate limit for images as requested)
+                        await rateLimitDelay();
+
+                        const imgResult = await performImageSearch(query);
+                        if (imgResult) {
+                            try {
+                                await sdk.messages.sendMessage({ chatGuid: target, message: `Here is an image for "${query}"` });
+
+                                const fs = await import('fs');
+                                const path = await import('path');
+                                const tmpPath = path.join('/tmp', `voice_img_${Date.now()}.jpg`);
+                                // Download with longer timeout to prevent 504s
+                                const imgResponse = await axios.get(imgResult, { responseType: 'arraybuffer', timeout: 15000 });
+                                fs.writeFileSync(tmpPath, Buffer.from(imgResponse.data));
+                                await sdk.attachments.sendAttachment({ chatGuid: target, filePath: tmpPath });
+                                console.log("Sent dedicated image attachment to", target);
+                                fs.unlinkSync(tmpPath);
+                            } catch (imgErr: any) {
+                                console.error("Failed to send image:", imgErr.message);
+                                await sdk.messages.sendMessage({ chatGuid: target, message: `Found image but failed to send: ${imgResult}` });
+                            }
+                        } else {
+                            await sdk.messages.sendMessage({ chatGuid: target, message: `Couldn't find an image for "${query}".` });
+                        }
+
                     } else {
                         // Default: Web search (existing logic)
                         let searchQuery: string;
