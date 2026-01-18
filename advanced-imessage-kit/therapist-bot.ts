@@ -1288,29 +1288,25 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                 const interestingFact = await extractInterestingFact(cleanedBackgroundInfo, name, affiliation);
 
                                 // Check for OAuth token
+                                // Check for OAuth token
                                 const oauthToken = await getOAuthTokenForPhone(phoneNumber);
-                                let signupMsg = "";
+
                                 if (!oauthToken) {
                                     const cleanPhone = phoneNumber.replace(/\D/g, '');
                                     const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
-                                    signupMsg = `\n\nALSO: Please sign in here to enable calendar features: [LINK: ${signupLink}]`;
-                                }
+                                    userProfile.onboardingStep = "needs_signup";
 
-                                if (interestingFact) {
+                                    // Use the fact if we have it, otherwise generic
+                                    const factMsg = interestingFact ? `I found this about you: "${interestingFact.fact}".` : "I've saved your info.";
+                                    toolResult = `${factMsg} But before we continue, ask the user to sign in to enable calendar features. Send this link clearly: [LINK: ${signupLink}]`;
+
+                                } else if (interestingFact) {
                                     userProfile.interestingFact = interestingFact.fact;
                                     userProfile.onboardingStep = "ask_followup";
-                                    toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"${signupMsg}`;
+                                    toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"`;
                                 } else {
-                                    // Fallback: move to signup step if no interesting fact found
-                                    if (oauthToken) {
-                                        userProfile.onboardingStep = "ask_followup"; // Or go straight to finalize
-                                        toolResult = `I couldn't find much online about your work, but that's cool! Ask them: "how's things going over there anyway?"`;
-                                    } else {
-                                        const cleanPhone = phoneNumber.replace(/\D/g, '');
-                                        const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
-                                        userProfile.onboardingStep = "needs_signup";
-                                        toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
-                                    }
+                                    userProfile.onboardingStep = "ask_followup";
+                                    toolResult = `I couldn't find much online about your work, but that's cool! Ask them: "how's things going over there anyway?"`;
                                 }
 
                             } else if (toolUse.name === "finalizeOnboarding") {
