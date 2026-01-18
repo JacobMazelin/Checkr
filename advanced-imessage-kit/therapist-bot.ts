@@ -9,10 +9,6 @@ import { search, searchImages, SafeSearchType } from "duck-duck-scrape";
 // Load .env.local from project root
 dotenv.config({ path: path.join(__dirname, "../.env.local") });
 
-
-// Load .env.local from project root
-dotenv.config({ path: path.join(__dirname, "../.env.local") });
-
 // Helper to ensure URL is set for local dev if missing
 if (!process.env.LEAN_MCP_URL) {
     process.env.LEAN_MCP_URL = "http://localhost:3001/mcp";
@@ -38,11 +34,7 @@ interface UserProfile {
     work: string | null;
     backgroundInfo: string | null;
 }
-const userProfile: UserProfile = {
-    name: null,
-    work: null,
-    backgroundInfo: null,
-};
+const userProfiles = new Map<string, UserProfile>();
 
 // Conversation History per Chat (keyed by chat GUID)
 const conversationHistory: Map<string, any[]> = new Map();
@@ -344,6 +336,12 @@ async function main() {
                 conversationHistory.set(chat.guid, []);
             }
             const history = conversationHistory.get(chat.guid)!;
+
+            // Get or initialize user profile for this chat
+            if (!userProfiles.has(chat.guid)) {
+                userProfiles.set(chat.guid, { name: null, work: null, backgroundInfo: null });
+            }
+            const userProfile = userProfiles.get(chat.guid)!;
 
             // Add the new user message to history
             history.push({ role: "user", content: userText });
