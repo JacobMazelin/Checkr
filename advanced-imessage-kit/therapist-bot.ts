@@ -81,9 +81,9 @@ let lastRequestTime = 0;
 async function rateLimitDelay() {
     const now = Date.now();
     const timeSinceLast = now - lastRequestTime;
-    if (timeSinceLast < 1100) { // Slightly more than 1s to be safe
-        const wait = 1100 - timeSinceLast;
-        // console.log(`Rate limiting: waiting ${wait}ms...`);
+    if (timeSinceLast < 2000) { // 2 seconds between Brave API calls
+        const wait = 2000 - timeSinceLast;
+        console.log(`Rate limiting: waiting ${wait}ms...`);
         await new Promise(r => setTimeout(r, wait));
     }
     lastRequestTime = Date.now();
@@ -284,7 +284,7 @@ async function performWebSearch(query: string): Promise<string> {
             timeout: 10000,
         });
 
-        const results = response.data.web || [];
+        const results = response.data.web?.results || [];
         if (!results.length) return "No results found.";
 
         return results
@@ -306,10 +306,11 @@ async function performImageSearch(query: string): Promise<string> {
             timeout: 10000,
         });
 
-        const images = response.data.images || [];
+        const images = response.data.results || [];
         if (!images.length) return "";
 
-        return images[0].url || "";
+        // Use thumbnail.src for the image URL
+        return images[0].thumbnail?.src || images[0].url || "";
     } catch (err: any) {
         console.error("Image search failed:", err.message);
         return "";
@@ -555,13 +556,29 @@ async function main() {
                     const cmd = res.data.command;
                     console.log("Voice Command Received:", cmd);
 
-                    // Execute Search
-                    const [webResult, imgResult] = await Promise.all([
-                        performWebSearch(cmd.query),
-                        performImageSearch(cmd.query)
-                    ]);
+                    // Handle nested ElevenLabs structure: query can be string OR object
+                    let searchQuery: string;
+                    let chatGuid: string | undefined;
 
-                    let finalMsg = `I found some info for "${cmd.query}":\n\n${webResult}`;
+                    if (typeof cmd.query === 'object' && cmd.query !== null) {
+                        // ElevenLabs nested format: { query: { search_query, chat_guid } }
+                        searchQuery = cmd.query.search_query || cmd.query.query || '';
+                        chatGuid = cmd.query.chat_guid || cmd.chat_guid;
+                    } else {
+                        // Direct format: { query: "string", chat_guid: "..." }
+                        searchQuery = cmd.query || '';
+                        chatGuid = cmd.chat_guid;
+                    }
+
+                    console.log("Parsed query:", searchQuery, "Target:", chatGuid);
+
+                    // Execute Search (sequential to avoid rate limiting)
+                    const webResult = await performWebSearch(searchQuery);
+                    console.log("Web search done, getting image...");
+                    const imgResult = await performImageSearch(searchQuery);
+                    console.log("Image result:", imgResult || "(none)");
+
+                    let finalMsg = `I found some info for "${searchQuery}":\n\n${webResult}`;
                     if (imgResult) {
                         finalMsg += `\n\n[IMAGE: ${imgResult}]`;
                     }
@@ -570,21 +587,51 @@ async function main() {
                     console.log("✅ GENERATED RESULT:\n", finalMsg);
 
                     // Determine target: Explicit > Fallback
-                    const primaryTarget = cmd.chat_guid;
+                    let primaryTarget = chatGuid;
                     const fallbackTarget = lastActiveChatGuid;
+
+                    // Format phone number to proper chat GUID format if needed
+                    if (primaryTarget && primaryTarget.startsWith('+') && !primaryTarget.includes(';')) {
+                        primaryTarget = `iMessage;-;${primaryTarget}`;
+                    }
 
                     // Try sending
                     const target = primaryTarget || fallbackTarget;
 
                     if (target) {
                         try {
-                            // Split and send
-                            const parts = finalMsg.split("||");
+                            // Send text message first (without image URL)
+                            const textMsg = `I found some info for "${searchQuery}":\n\n${webResult}`;
                             await sdk.messages.sendMessage({
                                 chatGuid: target,
-                                message: finalMsg
+                                message: textMsg
                             });
-                            console.log("Sent Voice Command response to", target);
+                            console.log("Sent Voice Command text to", target);
+
+                            // If we have an image, download and send as attachment
+                            if (imgResult) {
+                                try {
+                                    const fs = await import('fs');
+                                    const path = await import('path');
+                                    const tmpPath = path.join('/tmp', `voice_search_${Date.now()}.jpg`);
+
+                                    // Download image
+                                    const imgResponse = await axios.get(imgResult, { responseType: 'arraybuffer', timeout: 10000 });
+                                    fs.writeFileSync(tmpPath, Buffer.from(imgResponse.data));
+
+                                    // Send as attachment
+                                    await sdk.attachments.sendAttachment({
+                                        chatGuid: target,
+                                        filePath: tmpPath
+                                    });
+                                    console.log("Sent image attachment to", target);
+
+                                    // Cleanup
+                                    fs.unlinkSync(tmpPath);
+                                } catch (imgErr: any) {
+                                    console.error("Failed to send image:", imgErr.message);
+                                }
+                            }
                         } catch (sendErr) {
                             console.error(`Failed to send to ${target}:`, sendErr);
 
@@ -594,7 +641,7 @@ async function main() {
                                 try {
                                     await sdk.messages.sendMessage({
                                         chatGuid: fallbackTarget,
-                                        message: finalMsg
+                                        message: `I found some info for "${searchQuery}":\n\n${webResult}`
                                     });
                                     console.log("Sent to fallback successfully.");
                                 } catch (fallbackErr) {
