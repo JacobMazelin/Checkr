@@ -507,6 +507,12 @@ async function main() {
             }
             const history = conversationHistory.get(chat.guid)!;
 
+            // Get or initialize user profile for this chat
+            if (!userProfiles.has(chat.guid)) {
+                userProfiles.set(chat.guid, { name: null, work: null, backgroundInfo: null });
+            }
+            const userProfile = userProfiles.get(chat.guid)!;
+
             // Add the new user message to history
             history.push({ role: "user", content: userText });
 
