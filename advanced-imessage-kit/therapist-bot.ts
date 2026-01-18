@@ -330,17 +330,17 @@ async function performWebSearch(query: string): Promise<string> {
 
         // Fetch actual page content from top 2 results for richer information
         const enrichedResults = [];
-        
+
         for (let i = 0; i < Math.min(2, results.length); i++) {
             const result = results[i];
             let content = `${i + 1}. **${result.title}**\nURL: ${result.url}\n`;
-            
+
             // Try to fetch the actual page content
             try {
                 console.log(`Fetching content from search result: ${result.url}`);
                 await rateLimitDelay();
                 const pageContent = await fetchPageContent(result.url, 800);
-                
+
                 if (pageContent) {
                     content += `Summary: ${result.description || ""}\nContent: ${pageContent}`;
                 } else {
@@ -350,10 +350,10 @@ async function performWebSearch(query: string): Promise<string> {
                 // If fetch fails, just use description
                 content += `${result.description || ""}`;
             }
-            
+
             enrichedResults.push(content);
         }
-        
+
         // Add third result without fetching (to save time/quota)
         if (results.length > 2) {
             enrichedResults.push(`3. **${results[2].title}**\nURL: ${results[2].url}\n${results[2].description || ""}`);
@@ -566,10 +566,10 @@ function extractTextFromHtml(html: string): string {
     // Remove script and style elements
     let text = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
     text = text.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-    
+
     // Remove HTML tags
     text = text.replace(/<[^>]+>/g, ' ');
-    
+
     // Decode HTML entities
     text = text.replace(/&nbsp;/g, ' ');
     text = text.replace(/&amp;/g, '&');
@@ -577,10 +577,10 @@ function extractTextFromHtml(html: string): string {
     text = text.replace(/&gt;/g, '>');
     text = text.replace(/&quot;/g, '"');
     text = text.replace(/&#39;/g, "'");
-    
+
     // Clean up whitespace
     text = text.replace(/\s+/g, ' ').trim();
-    
+
     return text;
 }
 
@@ -593,7 +593,7 @@ async function fetchPageContent(url: string, maxLength: number = 2000): Promise<
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
             }
         });
-        
+
         const text = extractTextFromHtml(response.data);
         // Return first portion of the page
         return text.substring(0, maxLength);
@@ -607,15 +607,15 @@ async function fetchPageContent(url: string, maxLength: number = 2000): Promise<
 function isPersonalPage(url: string, title: string): boolean {
     const url_lower = url.toLowerCase();
     const title_lower = title.toLowerCase();
-    
+
     // Prefer LinkedIn, GitHub, portfolios, news articles about the person
     const personalIndicators = ['linkedin.com/in/', 'github.com', 'portfolio', 'medium.com', 'substack', 'twitter.com', 'news', 'blog'];
     const isPersonal = personalIndicators.some(indicator => url_lower.includes(indicator));
-    
+
     // Exclude generic institution pages
     const institutionExclusions = ['/school', '/university', '/about/us', 'university of', 'school of', '/directory', '/staff', '/faculty'];
     const isInstitution = institutionExclusions.some(exclusion => url_lower.includes(exclusion) || title_lower.includes(exclusion));
-    
+
     return isPersonal || !isInstitution;
 }
 
@@ -637,7 +637,7 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
             try {
                 console.log(`Searching: ${searchQuery}`);
                 await rateLimitDelay();
-                
+
                 const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
                     params: { q: searchQuery, count: 5 },
                     headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
@@ -645,7 +645,7 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
                 });
 
                 const results = response.data.web?.results || [];
-                
+
                 // Filter for personal pages and add to collection
                 for (const result of results) {
                     if (isPersonalPage(result.url, result.title)) {
@@ -656,7 +656,7 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
                         }
                     }
                 }
-                
+
                 if (allResults.length >= 5) break;
             } catch (err) {
                 console.log(`Search query failed: ${searchQuery}`);
@@ -668,14 +668,14 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
 
         // Fetch and parse the top relevant results for detailed information
         const detailedInfos: string[] = [];
-        
+
         for (const result of allResults.slice(0, 3)) {
             try {
                 console.log(`Fetching person-specific content from: ${result.url}`);
                 await rateLimitDelay(); // Rate limit between fetches
-                
+
                 const pageContent = await fetchPageContent(result.url, 2000);
-                
+
                 if (pageContent && pageContent.length > 100) { // Only use substantial content
                     const info = `
 📌 ${result.title}
@@ -854,9 +854,8 @@ async function bookCalendarAppointment(
             return "❌ Couldn't understand that time format. Try something like '2pm' or '14:00'.";
         }
 
-        let hour = parseInt(timeParts[1], 10);
+        let hour = parseInt(timeParts[1]!, 10);
         const minute = timeParts[2] ? parseInt(timeParts[2], 10) : 0;
-        const meridiem = timeParts[3]?.toLowerCase();
 
         if (meridiem === 'pm' && hour < 12) hour += 12;
         if (meridiem === 'am' && hour === 12) hour = 0;
@@ -1257,6 +1256,7 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                 console.log(`Completing onboarding for:`, args);
                                 const name = args.name;
                                 const affiliation = args.affiliation;
+                                const phoneNumber = message.handle?.address || "unknown";
 
                                 // Update the user profile
                                 userProfile.name = name;
@@ -1272,17 +1272,30 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                 // Extract interesting fact and generate follow-up question using Claude
                                 const interestingFact = await extractInterestingFact(cleanedBackgroundInfo, name, affiliation);
 
+                                // Check for OAuth token
+                                const oauthToken = await getOAuthTokenForPhone(phoneNumber);
+                                let signupMsg = "";
+                                if (!oauthToken) {
+                                    const cleanPhone = phoneNumber.replace(/\D/g, '');
+                                    const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
+                                    signupMsg = `\n\nALSO: Please sign in here to enable calendar features: [LINK: ${signupLink}]`;
+                                }
+
                                 if (interestingFact) {
                                     userProfile.interestingFact = interestingFact.fact;
                                     userProfile.onboardingStep = "ask_followup";
-                                    toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"`;
+                                    toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"${signupMsg}`;
                                 } else {
                                     // Fallback: move to signup step if no interesting fact found
-                                    const phoneNumber = message.handle?.address || "unknown";
-                                    const cleanPhone = phoneNumber.replace("+", "");
-                                    const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
-                                    userProfile.onboardingStep = "needs_signup";
-                                    toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
+                                    if (oauthToken) {
+                                        userProfile.onboardingStep = "ask_followup"; // Or go straight to finalize
+                                        toolResult = `I couldn't find much online about your work, but that's cool! Ask them: "how's things going over there anyway?"`;
+                                    } else {
+                                        const cleanPhone = phoneNumber.replace(/\D/g, '');
+                                        const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
+                                        userProfile.onboardingStep = "needs_signup";
+                                        toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
+                                    }
                                 }
 
                             } else if (toolUse.name === "finalizeOnboarding") {
