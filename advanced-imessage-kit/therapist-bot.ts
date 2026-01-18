@@ -210,7 +210,9 @@ If background context mentions "worked at Tesla on battery optimization", you co
 1. use lowercase, casual tone
 2. keep replies short (1–2 lines) most of the time
 3. avoid final periods for a texting feel
-4. FREQUENTLY use [love], [like], [laugh], [emphasize] to show warmth/engagement (not just for short replies).
+4. AT THE END of your message (or start), add a reaction tag if appropriate: [love], [like], [laugh], [emphasize], [question], [dislike]. 
+   - FORMAT MUST BE EXACT: brackets around the lowercase word. e.g. "That's awesome! [love]"
+   - React often to show warmth.
 5. small slang and mild interjections are fine ("lol", "idk", "ngl", "fr")
 6. brief typos or stretched words are okay when natural ("heyyy", "okkk", "waitt")
 7. vary phrasing and pet names, don't repeat the same nickname every time
@@ -1519,7 +1521,7 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                                             console.log(`Added ${cleanPhone} to pending signups tracking.`);
                                         }
 
-                                        toolResult = `Research done. I found: "${interestingFact.fact}".\nYOUR GOAL:\n1. Mention that casually but pivot to empathy ("sounds like u got a lot going on" or "that sounds intense").\n2. IMMEDIATELY ask: "so what brings u to reach out today?"\n${linkInstruction}`;
+                                        toolResult = `Research done. I found: "${interestingFact.fact}".\nYOUR GOAL:\n1. Mention that casually but pivot to empathy ("sounds like u got a lot going on" or "that sounds intense").\n2. IMMEDIATELY ask: "so what brings u to reach out today?"\n3. REACT to their message with [like] or [love].\n${linkInstruction}`;
 
                                         // Save extracted fact into Supabase immediately as description
                                         try {
@@ -1747,6 +1749,7 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
             await sdk.chats.stopTyping(chat.guid);
 
             // Check for reaction in brackets
+            console.log("Raw AI Response:", finalReplyText);
             let reactionType = "";
             let imageToDownload = "";
             let linkToSend = "";
@@ -1760,7 +1763,14 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
             const reactionMatch = finalReplyText.match(/\[(love|like|dislike|laugh|emphasize|question)\]/i);
             if (reactionMatch && reactionMatch[1]) {
                 reactionType = reactionMatch[1].toLowerCase();
+                // Clean the tag from the message
+                // Remove the full tag including brackets
                 finalReplyText = finalReplyText.replace(reactionMatch[0], "").trim();
+            } else if (Math.random() < 0.5) {
+                // Fallback: 50% chance to 'like' if no reaction specified by LLM
+                // promoting "liveness" and warmth
+                reactionType = "like";
+                console.log("Auto-fallback reaction trigged: like");
             }
 
             // Matches [IMAGE: url]
