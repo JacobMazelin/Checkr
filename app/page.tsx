@@ -184,12 +184,6 @@ function HomeContent() {
           <p className="text-xl text-gray-600 mb-8">
             Your Google account has been connected
           </p>
-          
-          {saveStatus === 'saved' && (
-            <p className="text-sm text-gray-500 mb-8">
-              This window will close automatically in 3 seconds...
-            </p>
-          )}
 
           {/* User Info Card */}
           <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-2xl p-6 mb-8">
