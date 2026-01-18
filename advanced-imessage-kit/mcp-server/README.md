@@ -36,27 +36,225 @@
   </a>
 </p>
 
-# mcp-server
+# MCP Server for Therapy Bot Calendar Integration
 
-MCP Server with Streamable HTTP Transport built with LeanMCP SDK
+> **Built with [LeanMCP](https://leanmcp.com/)** - Model Context Protocol server for Google Calendar scheduling during ElevenLabs voice calls.
 
-## Quick Start
+## 🎯 Overview
+
+This MCP server enables therapy session scheduling during phone conversations. It provides three core tools:
+
+1. **find_free_times_week** - Find all available time slots in user's calendar for the next 7 days
+2. **create_therapist_meeting** - Book "Therapy Session" events in Google Calendar  
+3. **send_text_confirmation** - Format confirmation messages for iMessage
+
+## 🚀 Quick Start
 
 ```bash
-# Install dependencies
+# 1. Install dependencies
 npm install
 
-# Start development server (hot reload)
+# 2. Configure environment
+cp .env.example .env
+# Edit .env with your Supabase credentials
+
+# 3. Start server
 npm run dev
-
-# Build for production
-npm run build
-
-# Run production server
-npm start
 ```
 
-## Project Structure
+Server runs on `http://localhost:3001`
+
+## 📚 Documentation
+
+- **[CALENDAR_SETUP.md](./CALENDAR_SETUP.md)** - Complete setup guide from scratch
+- **[IMPLEMENTATION_SUMMARY.md](./IMPLEMENTATION_SUMMARY.md)** - What was built and how it works
+- **[FLOW_DIAGRAMS.md](./FLOW_DIAGRAMS.md)** - Visual architecture and data flows
+- **[QUICK_REFERENCE.md](./QUICK_REFERENCE.md)** - Common commands and troubleshooting
+
+## ⚡ Features
+
+- **Supabase Integration**: Securely retrieves user OAuth tokens by phone number
+- **Smart Free Time Finder**: Analyzes next 7 days, excludes busy slots, returns business hours only
+- **Google Calendar API**: Creates events with proper formatting and returns calendar links
+- **Error Handling**: Graceful failures with detailed error messages
+- **Auto-Discovery**: Services are automatically loaded from `./mcp` directory
+
+## 🛠️ Available Tools
+
+### 1. `find_free_times_week`
+Finds all available time slots in the user's calendar for the next 7 days (weekdays, 9am-5pm).
+
+**Input:**
+```json
+{
+  "phone_number": "1234567890"
+}
+```
+
+**Output:**
+```
+Found 15 free time slots this week:
+Mon Jan 20 9:00 AM-10:00 AM
+Mon Jan 20 10:00 AM-11:00 AM
+Mon Jan 20 2:00 PM-3:00 PM
+...
+```
+
+### 2. `create_therapist_meeting`
+Creates a "Therapy Session" event in the user's Google Calendar.
+
+**Input:**
+```json
+{
+  "phone_number": "1234567890",
+  "start_time": "2026-01-20T14:00:00-05:00",
+  "end_time": "2026-01-20T15:00:00-05:00"
+}
+```
+
+**Output:**
+```
+✅ Therapy session scheduled for Mon, Jan 20, 2:00 PM!
+Calendar link: https://calendar.google.com/event?eid=...
+```
+
+### 3. `send_text_confirmation`
+Sends a text confirmation message to the user via iMessage.
+
+**Input:**
+```json
+{
+  "phone_number": "1234567890",
+  "message": "Your therapy session is confirmed for Monday, Jan 20 at 2:00 PM"
+}
+```
+
+## 🔧 Environment Setup
+
+Create a `.env` file with:
+
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
+```
+
+## 🧪 Testing
+
+```bash
+# Run test suite
+node test-calendar.js
+
+# Test specific endpoint
+curl -X POST http://localhost:3001/tools/find_free_times_week \
+  -H "Content-Type: application/json" \
+  -d '{"phone_number": "1234567890"}'
+```
+
+## 🔗 Integration with ElevenLabs
+
+1. Add MCP server URL to your ElevenLabs agent settings: `http://localhost:3001`
+2. Update agent system prompt with calendar flow instructions (see [CALENDAR_SETUP.md](./CALENDAR_SETUP.md))
+3. Test the flow with a phone call
+
+**Example conversation:**
+```
+User: "I want to schedule a therapy session"
+Agent: [calls find_free_times_week]
+       "You're free Monday at 2pm, Tuesday at 10am, or Wednesday at 3pm. Which works?"
+User: "Monday at 2pm"
+Agent: [calls create_therapist_meeting]
+       "Perfect! Your therapy session is booked for Monday at 2pm."
+       [calls send_text_confirmation]
+User: [receives text confirmation]
+```
+
+## 🏗️ Architecture
+
+```
+ElevenLabs Voice Call
+    ↓
+MCP Server (Port 3001)
+    ↓
+Supabase (OAuth tokens)
+    ↓
+Google Calendar API
+    ↓
+Calendar event created + confirmation sent
+```
+
+## 📦 Project Structure
+
+```
+mcp-server/
+├── main.ts                      # Server entry point
+├── mcp/
+│   └── google_calendar.ts       # Calendar tools implementation
+├── test-calendar.js             # Test suite
+├── .env.example                 # Environment template
+├── package.json                 # Dependencies
+└── docs/
+    ├── CALENDAR_SETUP.md        # Setup guide
+    ├── IMPLEMENTATION_SUMMARY.md # Technical details
+    ├── FLOW_DIAGRAMS.md         # Visual flows
+    └── QUICK_REFERENCE.md       # Command reference
+```
+
+## 🐛 Troubleshooting
+
+### "No OAuth token found"
+→ User needs to complete Google OAuth signup at your app's signup page
+
+### "Failed to check calendar"  
+→ OAuth token may be expired or invalid. User needs to re-authenticate
+
+### "MCP server not responding"
+→ Ensure server is running: `curl http://localhost:3001`
+
+See [QUICK_REFERENCE.md](./QUICK_REFERENCE.md) for more troubleshooting tips.
+
+## 🚢 Production Deployment
+
+Deploy to any Node.js hosting platform:
+- Railway
+- Render  
+- Fly.io
+- Heroku
+
+Update ElevenLabs agent with your production MCP server URL.
+
+## 📋 Requirements
+
+- Node.js 20+
+- npm or yarn
+- Supabase account with service role key
+- Google Calendar API access via OAuth
+- ElevenLabs voice agent (optional, for phone integration)
+
+## 🔐 Security Notes
+
+- OAuth tokens stored securely in Supabase
+- Service role key required (not anon key)
+- No RLS needed (service role bypasses)
+- Never commit `.env` file to git
+
+## 📄 License
+
+MIT
+
+## 🤝 Contributing
+
+This is a prototype for NexHacks. Feel free to fork and improve!
+
+## 🙏 Acknowledgments
+
+- Built with [LeanMCP](https://leanmcp.com/)
+- Uses Google Calendar API
+- Integrated with [ElevenLabs](https://elevenlabs.io/) voice agents
+- Database powered by [Supabase](https://supabase.com/)
+
+---
+
+**Need help?** Read [CALENDAR_SETUP.md](./CALENDAR_SETUP.md) for step-by-step instructions.
 
 ```
 mcp-server/

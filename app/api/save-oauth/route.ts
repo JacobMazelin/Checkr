@@ -3,7 +3,7 @@ import { supabaseServer } from '@/lib/supabase'
 
 export async function POST(req: NextRequest) {
   try {
-    const { phone, oauthCode, email } = await req.json()
+    const { phone, oauthCode, email, refreshToken } = await req.json()
 
     if (!phone || !oauthCode) {
       return NextResponse.json(

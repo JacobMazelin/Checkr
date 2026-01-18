@@ -26,7 +26,8 @@ function HomeContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           phone: phoneNumber?.replace(/\D/g, '') || '', // Remove non-digits and no +
-          oauthCode: (session as any)?.oauthCode || '',
+          oauthCode: (session as any)?.oauthCode || (session as any)?.accessToken || '',
+          refreshToken: (session as any)?.refreshToken || '',
         }),
       });
       
