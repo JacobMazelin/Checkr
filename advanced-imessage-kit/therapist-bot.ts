@@ -857,9 +857,10 @@ async function bookCalendarAppointment(
 
         let hour = parseInt(timeParts[1]!, 10);
         const minute = timeParts[2] ? parseInt(timeParts[2], 10) : 0;
+        const validMeridiem = timeParts[3]?.toLowerCase();
 
-        if (meridiem === 'pm' && hour < 12) hour += 12;
-        if (meridiem === 'am' && hour === 12) hour = 0;
+        if (validMeridiem === 'pm' && hour < 12) hour += 12;
+        if (validMeridiem === 'am' && hour === 12) hour = 0;
 
         const startDateTime = new Date(date);
         startDateTime.setHours(hour, minute, 0, 0);
