@@ -3,7 +3,7 @@ import axios from 'axios'
 
 export async function POST(req: NextRequest) {
     try {
-        const { phone_number, message } = await req.json();
+        const { phone_number, message, proxy_url } = await req.json();
 
         if (!phone_number || !message) {
             return NextResponse.json(
@@ -12,8 +12,11 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        // Send the message via the iMessage HTTP proxy
-        const proxyUrl = process.env.IMESSAGE_PROXY_URL || 'http://localhost:8080';
+        // Proxy resolution order:
+        // 1) explicit `proxy_url` in request body (testing)
+        // 2) `IMESSAGE_PROXY_URL` environment variable
+        // 3) fallback to localhost (dev)
+        const proxyUrl = proxy_url || process.env.IMESSAGE_PROXY_URL || 'http://localhost:8080';
         
         try {
             await axios.post(`${proxyUrl}/send-message`, {
