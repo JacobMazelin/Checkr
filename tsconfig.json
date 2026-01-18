@@ -30,5 +30,11 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "advanced-imessage-kit", "http-proxy"]
+  "exclude": [
+    "node_modules",
+    "advanced-imessage-kit",
+    "http-proxy",
+    "test-*.ts",
+    "auth.ts"
+  ]
 }

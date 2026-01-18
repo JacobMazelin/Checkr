@@ -1,35 +1,16 @@
 {
-  "version": 2,
-  "builds": [
+  "buildCommand": "next build",
+  "devCommand": "next dev",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "rewrites": [
     {
-      "src": "package.json",
-      "use": "@vercel/next"
+      "source": "/api/voice-bridge",
+      "destination": "/api/index.py"
     },
     {
-      "src": "api/index.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/auth/(.*)",
-      "dest": "/api/auth/$1"
-    },
-    {
-      "src": "/api/save-oauth",
-      "dest": "/api/save-oauth"
-    },
-    {
-      "src": "/api/voice-bridge",
-      "dest": "/api/voice-bridge"
-    },
-    {
-      "src": "/api/(.*)",
-      "dest": "/api"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/$1"
+      "source": "/api/:path*",
+      "destination": "/api/index.py"
     }
   ]
 }
