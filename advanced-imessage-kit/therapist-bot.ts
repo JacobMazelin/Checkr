@@ -637,7 +637,7 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
         for (const searchQuery of searchQueries) {
             try {
                 console.log(`Searching: ${searchQuery}`);
-                await rateLimitDelay();
+                // await rateLimitDelay(); // Removed for speed
 
                 const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
                     params: { q: searchQuery, count: 5 },
@@ -673,7 +673,7 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
         for (const result of allResults.slice(0, 3)) {
             try {
                 console.log(`Fetching person-specific content from: ${result.url}`);
-                await rateLimitDelay(); // Rate limit between fetches
+                // await rateLimitDelay(); // Removed for speed
 
                 const pageContent = await fetchPageContent(result.url, 2000);
 
