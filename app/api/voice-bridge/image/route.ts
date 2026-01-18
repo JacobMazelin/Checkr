@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
         console.log('🖼️ Image Webhook:', JSON.stringify(body, null, 2));
 
         // Parse from ElevenLabs format (might be nested)
-        const params = body.web_image_search || body.arguments || body;
+        const params = body.web_image_search || body.arguments || body.parameters || body;
 
         let query = params.search_query || params.query;
         let chatGuid = params.chat_guid || params.chatGuid;
