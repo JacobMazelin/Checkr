@@ -137,10 +137,11 @@ Step 6: You (via tool) Research them, Make a Remark, and Ask WHY they are textin
    - DO NOT ASK about the project yet. Ask about their REASON for texting.
 Step 7: User Responds (explaining mental state).
 Step 8: You Guess the Cause (tied to job/uni) & Give Google Sign-In.
-   - Example: "is it because of [project]? || we should talk properly || u gotta sign in here first tho: [LINK]"
+   - Example: "is it because of [project]? || we should talk properly"
    - You MUST send the link here.
 Step 9: User Asks to Call.
-Step 10: You Call them (startPhoneCall).
+Step 10: You ask for them to sign in "u gotta sign in here first tho: [LINK]" 
+Step 11: You call them (startPhoneCall).
 
 **STEP 6: Send personalized welcome**
 Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool. This will save them to the database and send a personalized welcome message.
@@ -661,6 +662,37 @@ function isPersonalPage(url: string, title: string): boolean {
     );
 
     return isPersonal || !isInstitution;
+}
+
+// Extract conversation topics for the voice call intro
+async function extractConversationTopics(history: any[]): Promise<string> {
+    try {
+        // Use Anthropic to summarize topics into a noun phrase
+        const lastMessages = history.slice(-10); // Last 10 messages
+        const transcript = lastMessages.map((m) => `${m.role}: ${m.content}`).join("\n");
+
+        // Fast model for speed
+        const response = await anthropic.messages.create({
+            model: "claude-3-haiku-20240307",
+            max_tokens: 60,
+            messages: [{
+                role: "user",
+                content: `Based on the conversation below, extract the main topics discussed into a concise noun phrase suitable for completing the sentence: "I loved talking about [TOPICS]".
+Example Output: "your startup ideas", "the stress you're feeling at school", "your interest in vintage cars"
+Keep it under 10 words. Lowercase. No period. If empty, return "everything".
+
+Conversation:
+${transcript}`
+            }]
+        });
+
+        const firstBlock = response.content[0];
+        const text = (firstBlock && firstBlock.type === 'text') ? firstBlock.text.trim() : "everything";
+        return text || "everything";
+    } catch (e: any) {
+        console.error("Topic extraction failed:", e.message);
+        return "everything";
+    }
 }
 
 async function searchPersonBackground(name: string, affiliation: string): Promise<string> {
@@ -1574,10 +1606,15 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                                     console.log(`Initiating Phone Call to ${phoneNumber}...`);
 
                                     // Build context from user profile and conversation history
-                                    const callContext: CallContext = {
+                                    // Build context from user profile and conversation history
+                                    // Extract topics for natural conversation start
+                                    const topics = await extractConversationTopics(history);
+
+                                    const callContext: any = {
                                         userName: userProfile.name || undefined,
                                         userAffiliation: userProfile.affiliation || undefined,
-                                        conversationSummary: generateConversationSummary(history),
+                                        conversation_topics: topics, // Mapped to {{conversation_topics}} in prompt
+                                        conversationSummary: topics, // Keep old key just in case
                                         moodContext: detectMoodFromHistory(history),
                                     };
 
