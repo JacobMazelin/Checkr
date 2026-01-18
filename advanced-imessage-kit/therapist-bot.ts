@@ -82,6 +82,9 @@ function getOrCreateUserProfile(phoneNumber: string): UserProfile {
 // Conversation History per Chat (keyed by chat GUID)
 const conversationHistory: Map<string, any[]> = new Map();
 
+// Track pending signups for Auto-Call feature
+const pendingSignups = new Set<string>();
+
 // Global Rate Limiter for Brave API (Max 1 req/sec)
 let lastRequestTime = 0;
 async function rateLimitDelay() {
@@ -128,7 +131,7 @@ core rules:
 **You must guide the user through this exact 10-step flow:**
 
 Step 1: User says Hi.
-Step 2: You say Hi & Ask for Name ("hey whats ur name?").
+Step 2: You say Hi & Ask for Name ("hey whats ur full name?").
 Step 3: User gives Name.
 Step 4: You Ask for University/Job ("nice to meet u [name] || where do u go to school or work?").
 Step 5: User gives Uni/Job.
@@ -136,12 +139,14 @@ Step 6: You (via tool) Research them, Make a Remark, and Ask WHY they are textin
    - Example: "oh i saw you're at [place] doing [project]... so what brings u to reach out today?"
    - DO NOT ASK about the project yet. Ask about their REASON for texting.
 Step 7: User Responds (explaining mental state).
-Step 8: You Guess the Cause (tied to job/uni) & Give Google Sign-In.
-   - Example: "is it because of [project]? || we should talk properly"
-   - You MUST send the link here.
-Step 9: User Asks to Call.
-Step 10: You ask for them to sign in "u gotta sign in here first tho: [LINK]" 
-Step 11: You call them (startPhoneCall).
+Step 8: You Guess the Cause (tied to job/uni).
+   - Example: "is it because of [project]?"
+   - DO NOT send the link yet.
+Step 9: User Responds (Yes/No).
+Step 10: You Acknowledge & Send Signup Link for Auto-Call.
+   - You say: "Okay, fill this out and lmk when you're done: [LINK]"
+Step 11: User says something like "Done"
+Step 12: Great! Calling you now. (startPhoneCall)
 
 **STEP 6: Send personalized welcome**
 Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool. This will save them to the database and send a personalized welcome message.
@@ -954,6 +959,56 @@ async function bookCalendarAppointment(phoneNumber: string, dateStr: string, sta
     }
 }
 
+// Helper to check for new signups and auto-call
+async function checkForNewSignups(sdk: any) {
+    if (pendingSignups.size === 0) return;
+
+    for (const phone of pendingSignups) {
+        // phone is clean digits here (e.g. 1555...)
+        // Check for token (cheap query)
+        const token = await getOAuthTokenForPhone(phone);
+
+        if (token) {
+            console.log(`✨ Signup detected for ${phone}! Triggering auto-call...`);
+            pendingSignups.delete(phone); // Stop checking
+
+            // Reconstruct likely chat GUID (assuming +1 if 11 digits, or just +)
+            const targetGuid = `iMessage;-;+${phone}`;
+
+            try {
+                await sdk.messages.sendMessage({
+                    chatGuid: targetGuid,
+                    message: "Signup confirmed! Calling you now... 📞"
+                });
+
+                // Load history & profile for context
+                const history = conversationHistory.get(targetGuid) || [];
+                const topics = await extractConversationTopics(history);
+                const profile = userProfiles.get(phone) || { name: "", affiliation: "", backgroundInfo: "", interestingFact: "", hasSearchedBackground: true, hasSentSignupLink: true, onboardingStep: "completed" };
+
+                const callContext = {
+                    userName: profile.name || undefined,
+                    userAffiliation: profile.affiliation || undefined,
+                    conversation_topics: topics,
+                    conversationSummary: topics,
+                    moodContext: detectMoodFromHistory(history)
+                };
+
+                await initiateElevenLabsCall(`+${phone}`, callContext);
+
+                // Update state
+                if (userProfiles.has(phone)) {
+                    const p = userProfiles.get(phone)!;
+                    p.onboardingStep = "completed";
+                    p.hasSentSignupLink = true;
+                }
+            } catch (e: any) {
+                console.error(`Auto-call failed for ${phone}:`, e.message);
+            }
+        }
+    }
+}
+
 async function main() {
     const sdk = createSDK({
         serverUrl: process.env.SERVER_URL,
@@ -1046,6 +1101,9 @@ async function main() {
         console.log("Starting Voice Bridge Polling...");
         setInterval(async () => {
             try {
+                // Check for new signups to trigger auto-calls
+                await checkForNewSignups(sdk);
+
                 // Poll Vercel Bridge (Assuming BRIDGE_URL provided or defaulting to known structure for testing)
                 // Note: User needs to populate BRIDGE_URL in .env.local usually, but we'll try to guess if missing or wait.
                 const bridgeUrl = process.env.BRIDGE_URL;
@@ -1451,7 +1509,10 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                                         if (!oauthToken) {
                                             const cleanPhone = phoneNumber.replace(/\D/g, '');
                                             const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
-                                            linkInstruction = `\nNOTE FOR FUTURE (Step 8): When they reply with their reason, you MUST send this link: [LINK: ${signupLink}]\nRemember this link for the next turn.`;
+                                            linkInstruction = `\nNOTE FOR FUTURE (Step 10): After they respond to your guess (Step 9), say: "Okay, fill this out and I'll call you automatically: [LINK: ${signupLink}]". Auto-call is ready.`;
+                                            // Add to pending signups tracking
+                                            pendingSignups.add(cleanPhone);
+                                            console.log(`Added ${cleanPhone} to pending signups tracking.`);
                                         }
 
                                         toolResult = `Research done. I found: "${interestingFact.fact}".\nYOUR GOAL:\n1. Mention the fact casually.\n2. IMMEDIATELY ask: "so what brings u to reach out today?" (or "why'd u text?").\n${linkInstruction}`;
@@ -1586,10 +1647,11 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                                     }
                                 }
 
+                                const callInstruction = " IMPORTANT: The user wants to talk. You MUST use the startPhoneCall tool immediately after this.";
                                 if (funFact) {
-                                    toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" then throw in a fun fact based on what you learned: "${funFact}". Let them know you're ready whenever they need.`;
+                                    toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" then throw in a fun fact based on what you learned: "${funFact}".${callInstruction}`;
                                 } else {
-                                    toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" and that you're ready whenever they need.`;
+                                    toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}".${callInstruction}`;
                                 }
                             } else if (toolUse.name === "webImageSearch") {
                                 toolResult = await performImageSearch(args.query);
@@ -1689,8 +1751,8 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                     ? `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`
                     : "";
 
-            // Matches [love], [like], etc.
-            const reactionMatch = finalReplyText.match(/^\[(love|like|dislike|laugh|emphasize|question)\]/i);
+            // Matches [love], [like], etc. anywhere in the message
+            const reactionMatch = finalReplyText.match(/\[(love|like|dislike|laugh|emphasize|question)\]/i);
             if (reactionMatch && reactionMatch[1]) {
                 reactionType = reactionMatch[1].toLowerCase();
                 finalReplyText = finalReplyText.replace(reactionMatch[0], "").trim();
