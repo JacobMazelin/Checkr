@@ -57,9 +57,14 @@ export async function POST(req: NextRequest) {
             );
         }
 
+        console.log(`[Create Event] Phone: ${phone_number}, Date: ${date}, Time: ${time}`);
+        
         const token = await getOAuthToken(phone_number);
+        console.log(`[Create Event] OAuth token retrieved: ${token.substring(0, 20)}...`);
         
         const startTime = parseDateTime(date, time);
+        console.log(`[Create Event] Parsed start time: ${startTime.toISOString()}`);
+        
         const endTime = new Date(startTime);
         endTime.setHours(startTime.getHours() + 1);
 
@@ -76,6 +81,7 @@ export async function POST(req: NextRequest) {
             }
         };
 
+        console.log(`[Create Event] Calling Google Calendar API...`);
         const response = await axios.post(
             "https://www.googleapis.com/calendar/v3/calendars/primary/events",
             event,
@@ -87,6 +93,7 @@ export async function POST(req: NextRequest) {
             }
         );
 
+        console.log(`[Create Event] Success! Event ID: ${response.data.id}`);
         return NextResponse.json({
             success: true,
             eventId: response.data.id,
@@ -97,9 +104,10 @@ export async function POST(req: NextRequest) {
         });
 
     } catch (error: any) {
-        console.error("Calendar API error:", error.response?.data || error.message);
+        console.error("[Create Event] Error:", error.response?.data || error.message);
+        console.error("[Create Event] Full error:", error);
         return NextResponse.json(
-            { error: error.message || 'Failed to create event' },
+            { error: error.response?.data?.error?.message || error.message || 'Failed to create event' },
             { status: 500 }
         );
     }
