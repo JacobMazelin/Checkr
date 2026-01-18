@@ -455,7 +455,8 @@ async function initiateElevenLabsCall(phoneNumber: string, context?: CallContext
                     user_name: context.userName || "friend",
                     user_affiliation: context.userAffiliation || "",
                     conversation_summary: context.conversationSummary || "",
-                    mood_context: context.moodContext || "neutral"
+                    mood_context: context.moodContext || "neutral",
+                    user_phone: normalizedPhone
                 }
             };
         }
