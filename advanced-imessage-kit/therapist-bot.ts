@@ -257,6 +257,21 @@ do any of those vibes match what ur looking for?"
 - **RULE:** ANY time you search for a place, ALSO use webImageSearch to get a picture.
 - Output images as: [IMAGE: url]
 - AVOID: istockphoto, gettyimages, twitter/x (they block downloads).
+
+---
+
+### VOICE CALL FEATURE
+If the user asks to talk on the phone, speak with you via voice, or wants a call instead of text:
+- Use the **startPhoneCall** tool
+- Say something like: "calling you now! 📞 pick up when ur phone rings"
+- The call will come from Jack (your voice agent) via ElevenLabs
+
+**TRIGGERS for startPhoneCall:**
+- "can I talk to you?"
+- "can you call me?"
+- "I want to talk instead of text"
+- "can we do voice?"
+- "I prefer calls"
 `;
 
 // Compress input with The Token Company before sending to Claude
@@ -368,6 +383,101 @@ async function performImageSearch(query: string): Promise<string> {
     } catch (err: any) {
         console.error("Image search failed:", err.message);
         return "";
+    }
+}
+
+// Context to pass from text conversation to voice call
+interface CallContext {
+    userName?: string;
+    userAffiliation?: string;
+    conversationSummary?: string;
+    moodContext?: string;
+}
+
+// Generate a summary of recent conversation for voice context
+function generateConversationSummary(messages: { role: string; content: string | any }[]): string {
+    if (!messages.length) return "";
+    const recent = messages.slice(-6);
+    const summaryParts = recent
+        .filter(m => typeof m.content === 'string')
+        .map(m => `${m.role === 'user' ? 'User' : 'Jack'}: ${(m.content as string).slice(0, 100)}`)
+        .join(' | ');
+    return summaryParts.slice(0, 500);
+}
+
+// Detect mood from conversation history
+function detectMoodFromHistory(messages: { role: string; content: string | any }[]): string {
+    const keywords: Record<string, string[]> = {
+        stressed: ["stress", "stressed", "overwhelming", "too much"],
+        anxious: ["anxious", "anxiety", "worried", "nervous"],
+        sad: ["sad", "down", "depressed", "lonely"],
+        happy: ["happy", "excited", "good", "great"]
+    };
+    const text = messages.filter(m => typeof m.content === 'string').map(m => m.content as string).join(" ").toLowerCase();
+    const detected: string[] = [];
+    for (const [mood, words] of Object.entries(keywords)) {
+        if (words.some(w => text.includes(w))) detected.push(mood);
+    }
+    return detected.length > 0 ? detected.join(", ") : "neutral";
+}
+
+// Initiate an outbound call via ElevenLabs Twilio integration with context
+async function initiateElevenLabsCall(phoneNumber: string, context?: CallContext): Promise<{ success: boolean; message: string }> {
+    const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+    const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID;
+    const ELEVENLABS_PHONE_NUMBER_ID = process.env.ELEVENLABS_PHONE_NUMBER_ID;
+
+    if (!ELEVENLABS_API_KEY || !ELEVENLABS_AGENT_ID || !ELEVENLABS_PHONE_NUMBER_ID) {
+        console.error("Missing ElevenLabs API credentials. Required: ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, ELEVENLABS_PHONE_NUMBER_ID");
+        return { success: false, message: "Voice calling not configured. Please contact support." };
+    }
+
+    // Normalize phone number (ensure it starts with +)
+    let normalizedPhone = phoneNumber.replace(/[^0-9+]/g, '');
+    if (!normalizedPhone.startsWith('+')) {
+        normalizedPhone = '+1' + normalizedPhone; // Assume US if no country code
+    }
+
+    try {
+        console.log(`Initiating ElevenLabs call to ${normalizedPhone}...`);
+        if (context) console.log("Passing context:", context);
+
+        const requestBody: any = {
+            agent_id: ELEVENLABS_AGENT_ID,
+            agent_phone_number_id: ELEVENLABS_PHONE_NUMBER_ID,
+            to_number: normalizedPhone
+        };
+
+        // Add dynamic variables if context provided
+        if (context) {
+            requestBody.conversation_initiation_client_data = {
+                dynamic_variables: {
+                    user_name: context.userName || "friend",
+                    user_affiliation: context.userAffiliation || "",
+                    conversation_summary: context.conversationSummary || "",
+                    mood_context: context.moodContext || "neutral"
+                }
+            };
+        }
+
+        const response = await axios.post(
+            'https://api.elevenlabs.io/v1/convai/twilio/outbound-call',
+            requestBody,
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'xi-api-key': ELEVENLABS_API_KEY
+                },
+                timeout: 15000
+            }
+        );
+
+        console.log("ElevenLabs call initiated:", response.data);
+        return { success: true, message: "Call initiated! Your phone should ring in a moment." };
+    } catch (err: any) {
+        const errorMsg = err?.response?.data?.detail || err?.response?.data?.message || err.message;
+        console.error("ElevenLabs call failed:", errorMsg);
+        return { success: false, message: `Failed to initiate call: ${errorMsg}` };
     }
 }
 
@@ -632,6 +742,165 @@ async function saveUserToSupabase(
     }
 }
 
+// ================ GOOGLE CALENDAR FUNCTIONS ================
+
+// Get OAuth token from Supabase for a phone number
+async function getOAuthTokenForPhone(phoneNumber: string): Promise<string | null> {
+    try {
+        const cleanPhone = phoneNumber.replace(/\D/g, '');
+
+        const { data, error } = await supabaseServer
+            .from('checkrdata')
+            .select('oauthcode')
+            .eq('phone', parseInt(cleanPhone, 10))
+            .single();
+
+        if (error || !data?.oauthcode) {
+            console.error("No OAuth token found for phone:", cleanPhone);
+            return null;
+        }
+
+        return data.oauthcode;
+    } catch (err: any) {
+        console.error("Failed to get OAuth token:", err.message);
+        return null;
+    }
+}
+
+// Check calendar free/busy for a given date
+async function checkCalendarFreeTimes(phoneNumber: string, dateStr: string): Promise<string> {
+    try {
+        const token = await getOAuthTokenForPhone(phoneNumber);
+        if (!token) {
+            return "❌ You need to sign up first to use calendar features. Check your texts for the sign-up link!";
+        }
+
+        const date = new Date(dateStr);
+        const timeMin = new Date(date);
+        timeMin.setHours(9, 0, 0, 0); // Start at 9 AM
+        const timeMax = new Date(date);
+        timeMax.setHours(17, 0, 0, 0); // End at 5 PM
+
+        const response = await axios.post(
+            "https://www.googleapis.com/calendar/v3/freeBusy",
+            {
+                timeMin: timeMin.toISOString(),
+                timeMax: timeMax.toISOString(),
+                items: [{ id: "primary" }]
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                timeout: 10000
+            }
+        );
+
+        const busy = response.data.calendars?.primary?.busy || [];
+
+        // Generate available slots (1-hour slots from 9 AM to 5 PM minus busy times)
+        const availableSlots: string[] = [];
+        for (let hour = 9; hour < 17; hour++) {
+            const slotStart = new Date(date);
+            slotStart.setHours(hour, 0, 0, 0);
+            const slotEnd = new Date(date);
+            slotEnd.setHours(hour + 1, 0, 0, 0);
+
+            // Check if this slot overlaps with any busy period
+            const isBusy = busy.some((b: { start: string; end: string }) => {
+                const busyStart = new Date(b.start);
+                const busyEnd = new Date(b.end);
+                return slotStart < busyEnd && slotEnd > busyStart;
+            });
+
+            if (!isBusy) {
+                const timeStr = slotStart.toLocaleTimeString('en-US', {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    hour12: true
+                });
+                availableSlots.push(timeStr);
+            }
+        }
+
+        if (availableSlots.length === 0) {
+            return `📅 No available slots on ${date.toLocaleDateString()}. Try a different day!`;
+        }
+
+        return `📅 Available times on ${date.toLocaleDateString()}:\n${availableSlots.join(', ')}`;
+    } catch (err: any) {
+        console.error("Calendar API error:", err.response?.data || err.message);
+        return `❌ Couldn't check calendar: ${err.message}`;
+    }
+}
+
+// Book an appointment on the calendar
+async function bookCalendarAppointment(
+    phoneNumber: string,
+    dateStr: string,
+    startTime: string
+): Promise<string> {
+    try {
+        const token = await getOAuthTokenForPhone(phoneNumber);
+        if (!token) {
+            return "❌ You need to sign up first to use calendar features.";
+        }
+
+        // Parse the date and time
+        const date = new Date(dateStr);
+        const timeParts = startTime.match(/(\d+):?(\d*)?\s*(am|pm)?/i);
+        if (!timeParts) {
+            return "❌ Couldn't understand that time format. Try something like '2pm' or '14:00'.";
+        }
+
+        let hour = parseInt(timeParts[1], 10);
+        const minute = timeParts[2] ? parseInt(timeParts[2], 10) : 0;
+        const meridiem = timeParts[3]?.toLowerCase();
+
+        if (meridiem === 'pm' && hour < 12) hour += 12;
+        if (meridiem === 'am' && hour === 12) hour = 0;
+
+        const startDateTime = new Date(date);
+        startDateTime.setHours(hour, minute, 0, 0);
+
+        const endDateTime = new Date(startDateTime);
+        endDateTime.setHours(endDateTime.getHours() + 1); // 1-hour appointment
+
+        const response = await axios.post(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            {
+                summary: "Therapy Session with Jack 🎸",
+                description: "Virtual therapy session booked via AI assistant",
+                start: { dateTime: startDateTime.toISOString() },
+                end: { dateTime: endDateTime.toISOString() }
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                timeout: 10000
+            }
+        );
+
+        const eventLink = response.data.htmlLink;
+        const formattedTime = startDateTime.toLocaleString('en-US', {
+            weekday: 'long',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+        });
+
+        return `✅ Booked! Therapy session on ${formattedTime}\n📎 Calendar link: ${eventLink}`;
+    } catch (err: any) {
+        console.error("Calendar booking error:", err.response?.data || err.message);
+        return `❌ Couldn't book appointment: ${err.message}`;
+    }
+}
+
 async function main() {
     const sdk = createSDK({
         serverUrl: process.env.SERVER_URL,
@@ -739,101 +1008,85 @@ async function main() {
                     const cmd = res.data.command;
                     console.log("Voice Command Received:", cmd);
 
-                    // Handle nested ElevenLabs structure: query can be string OR object
-                    let searchQuery: string;
-                    let chatGuid: string | undefined;
+                    // Get chat target
+                    let chatGuid = cmd.chat_guid || cmd.query?.chat_guid;
+                    if (chatGuid && chatGuid.startsWith('+') && !chatGuid.includes(';')) {
+                        chatGuid = `iMessage;-;${chatGuid}`;
+                    }
+                    const target = chatGuid || lastActiveChatGuid;
 
-                    if (typeof cmd.query === 'object' && cmd.query !== null) {
-                        // ElevenLabs nested format: { query: { search_query, chat_guid } }
-                        searchQuery = cmd.query.search_query || cmd.query.query || '';
-                        chatGuid = cmd.query.chat_guid || cmd.chat_guid;
+                    if (!target) {
+                        console.warn("⚠️ No target chat found. Text the bot first!");
+                        return;
+                    }
+
+                    // Route by command type
+                    const cmdType = cmd.type || 'search'; // Default to search for backwards compatibility
+
+                    if (cmdType === 'check_calendar') {
+                        // Check calendar availability
+                        const phoneNumber = chatGuid?.match(/\+?\d{10,15}/)?.[0] || '';
+                        const dateStr = cmd.date || new Date().toISOString().split('T')[0];
+                        console.log(`📅 Checking calendar for ${phoneNumber} on ${dateStr}`);
+
+                        const result = await checkCalendarFreeTimes(phoneNumber, dateStr);
+                        await sdk.messages.sendMessage({ chatGuid: target, message: result });
+                        console.log("Sent calendar availability to", target);
+
+                    } else if (cmdType === 'book_appointment') {
+                        // Book appointment
+                        const phoneNumber = chatGuid?.match(/\+?\d{10,15}/)?.[0] || '';
+                        const dateStr = cmd.date || new Date().toISOString().split('T')[0];
+                        const startTime = cmd.start_time || '10am';
+                        console.log(`📅 Booking appointment for ${phoneNumber}: ${dateStr} at ${startTime}`);
+
+                        const result = await bookCalendarAppointment(phoneNumber, dateStr, startTime);
+                        await sdk.messages.sendMessage({ chatGuid: target, message: result });
+                        console.log("Sent booking confirmation to", target);
+
+                    } else if (cmdType === 'send_text') {
+                        // Send custom text message
+                        const message = cmd.message || 'Message from Jack 🎸';
+                        await sdk.messages.sendMessage({ chatGuid: target, message });
+                        console.log("Sent custom text to", target);
+
                     } else {
-                        // Direct format: { query: "string", chat_guid: "..." }
-                        searchQuery = cmd.query || '';
-                        chatGuid = cmd.chat_guid;
-                    }
+                        // Default: Web search (existing logic)
+                        let searchQuery: string;
+                        if (typeof cmd.query === 'object' && cmd.query !== null) {
+                            searchQuery = cmd.query.search_query || cmd.query.query || '';
+                        } else {
+                            searchQuery = cmd.query || '';
+                        }
 
-                    console.log("Parsed query:", searchQuery, "Target:", chatGuid);
+                        console.log("Parsed query:", searchQuery, "Target:", target);
 
-                    // Execute Search (sequential to avoid rate limiting)
-                    const webResult = await performWebSearch(searchQuery);
-                    console.log("Web search done, getting image...");
-                    const imgResult = await performImageSearch(searchQuery);
-                    console.log("Image result:", imgResult || "(none)");
+                        // Execute Search (sequential to avoid rate limiting)
+                        const webResult = await performWebSearch(searchQuery);
+                        console.log("Web search done, getting image...");
+                        const imgResult = await performImageSearch(searchQuery);
+                        console.log("Image result:", imgResult || "(none)");
 
-                    let finalMsg = `I found some info for "${searchQuery}":\n\n${webResult}`;
-                    if (imgResult) {
-                        finalMsg += `\n\n[IMAGE: ${imgResult}]`;
-                    }
+                        // Send text message first
+                        const textMsg = `I found some info for "${searchQuery}":\n\n${webResult}`;
+                        await sdk.messages.sendMessage({ chatGuid: target, message: textMsg });
+                        console.log("Sent Voice Command text to", target);
 
-                    // Log to console so user sees it even if send fails
-                    console.log("✅ GENERATED RESULT:\n", finalMsg);
-
-                    // Determine target: Explicit > Fallback
-                    let primaryTarget = chatGuid;
-                    const fallbackTarget = lastActiveChatGuid;
-
-                    // Format phone number to proper chat GUID format if needed
-                    if (primaryTarget && primaryTarget.startsWith('+') && !primaryTarget.includes(';')) {
-                        primaryTarget = `iMessage;-;${primaryTarget}`;
-                    }
-
-                    // Try sending
-                    const target = primaryTarget || fallbackTarget;
-
-                    if (target) {
-                        try {
-                            // Send text message first (without image URL)
-                            const textMsg = `I found some info for "${searchQuery}":\n\n${webResult}`;
-                            await sdk.messages.sendMessage({
-                                chatGuid: target,
-                                message: textMsg
-                            });
-                            console.log("Sent Voice Command text to", target);
-
-                            // If we have an image, download and send as attachment
-                            if (imgResult) {
-                                try {
-                                    const fs = await import('fs');
-                                    const path = await import('path');
-                                    const tmpPath = path.join('/tmp', `voice_search_${Date.now()}.jpg`);
-
-                                    // Download image
-                                    const imgResponse = await axios.get(imgResult, { responseType: 'arraybuffer', timeout: 10000 });
-                                    fs.writeFileSync(tmpPath, Buffer.from(imgResponse.data));
-
-                                    // Send as attachment
-                                    await sdk.attachments.sendAttachment({
-                                        chatGuid: target,
-                                        filePath: tmpPath
-                                    });
-                                    console.log("Sent image attachment to", target);
-
-                                    // Cleanup
-                                    fs.unlinkSync(tmpPath);
-                                } catch (imgErr: any) {
-                                    console.error("Failed to send image:", imgErr.message);
-                                }
-                            }
-                        } catch (sendErr) {
-                            console.error(`Failed to send to ${target}:`, sendErr);
-
-                            // If we tried primary and failed, and have a DIFFERENT fallback, try that
-                            if (primaryTarget && fallbackTarget && primaryTarget !== fallbackTarget) {
-                                console.log(`🔄 Retrying with fallback: ${fallbackTarget}`);
-                                try {
-                                    await sdk.messages.sendMessage({
-                                        chatGuid: fallbackTarget,
-                                        message: `I found some info for "${searchQuery}":\n\n${webResult}`
-                                    });
-                                    console.log("Sent to fallback successfully.");
-                                } catch (fallbackErr) {
-                                    console.error("Fallback failed too.");
-                                }
+                        // If we have an image, download and send as attachment
+                        if (imgResult) {
+                            try {
+                                const fs = await import('fs');
+                                const path = await import('path');
+                                const tmpPath = path.join('/tmp', `voice_search_${Date.now()}.jpg`);
+                                const imgResponse = await axios.get(imgResult, { responseType: 'arraybuffer', timeout: 10000 });
+                                fs.writeFileSync(tmpPath, Buffer.from(imgResponse.data));
+                                await sdk.attachments.sendAttachment({ chatGuid: target, filePath: tmpPath });
+                                console.log("Sent image attachment to", target);
+                                fs.unlinkSync(tmpPath);
+                            } catch (imgErr: any) {
+                                console.error("Failed to send image:", imgErr.message);
                             }
                         }
-                    } else {
-                        console.warn("⚠️ No active chat found to send response. Text the bot first!");
                     }
                 }
             } catch (e: any) {
@@ -1087,9 +1340,28 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                 toolResult = await performImageSearch(args.query);
 
                             } else if (toolUse.name === "startPhoneCall") {
-                                console.log("Initiating Phone Call...");
-                                toolResult = "Call initiated successfully. YOU ARE CALLING THEM NOW.";
-                                // TODO: Trigger ElevenLabs call here
+                                // Extract phone number from chat GUID (format: iMessage;-;+1234567890)
+                                const chatGuid = chat.guid;
+                                const phoneMatch = chatGuid.match(/\+?\d{10,15}/);
+                                const phoneNumber = phoneMatch ? phoneMatch[0] : null;
+
+                                if (!phoneNumber) {
+                                    console.error("Could not extract phone number from chat GUID:", chatGuid);
+                                    toolResult = "Sorry, I couldn't find your phone number to call you.";
+                                } else {
+                                    console.log(`Initiating Phone Call to ${phoneNumber}...`);
+
+                                    // Build context from user profile and conversation history
+                                    const callContext: CallContext = {
+                                        userName: userProfile.name || undefined,
+                                        userAffiliation: userProfile.affiliation || undefined,
+                                        conversationSummary: generateConversationSummary(history),
+                                        moodContext: detectMoodFromHistory(history)
+                                    };
+
+                                    const callResult = await initiateElevenLabsCall(phoneNumber, callContext);
+                                    toolResult = callResult.message;
+                                }
 
                             } else if (toolUse.name === "webSearch" || toolUse.name === "googleMaps") {
                                 toolResult = await performWebSearch(args.query);
