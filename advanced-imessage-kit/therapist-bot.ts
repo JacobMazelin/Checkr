@@ -24,6 +24,7 @@ console.log("SERVER_URL:", process.env.SERVER_URL ? "Set" : "Not Set");
 console.log("API_KEY:", process.env.API_KEY || process.env.PHOTON_API_KEY ? "Set" : "Not Set");
 console.log("CLAUDE_API_KEY:", process.env.CLAUDE_API_KEY ? "Set" : "Not Set");
 console.log("BRAVE_API_KEY:", process.env.BRAVE_API_KEY ? "Set" : "Not Set");
+console.log("TOKEN_COMPANY_API_KEY:", process.env.TOKEN_COMPANY_API_KEY ? "Set" : "Not Set");
 console.log("--------------------");
 
 // Initialize Anthropic client
@@ -163,6 +164,46 @@ do any of those vibes match what ur looking for?"
 - AVOID: istockphoto, gettyimages, twitter/x (they block downloads).
 `;
 
+// Compress input with The Token Company before sending to Claude
+async function compressInput(input: string): Promise<string | null> {
+    const apiKey = "ttc_sk_jrxhjZs4H-0CYLWGmMqtUFcgIQb8XGKjEO09azDXnKU";
+    if (!apiKey) {
+        console.warn("TOKEN_COMPANY_API_KEY not set — skipping compression.");
+        return null;
+    }
+    try {
+        const resp = await axios.post(
+            "https://api.thetokencompany.com/v1/compress",
+            {
+                model: "bear-1",
+                compression_settings: {
+                    aggressiveness: 0.1,
+                    max_output_tokens: null,
+                    min_output_tokens: null,
+                },
+                input,
+            },
+            {
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${apiKey}`,
+                },
+                timeout: 15000,
+            }
+        );
+
+        const output = (resp.data && (resp.data.output || resp.data.compressed || resp.data.result)) as string | undefined;
+        if (!output) {
+            console.warn("Compression API returned no output — using original input.");
+            return null;
+        }
+        return output;
+    } catch (e: any) {
+        console.error("Compression API failed:", e?.response?.data || e?.message || String(e));
+        return null;
+    }
+}
+
 
 async function main() {
     const sdk = createSDK({
@@ -285,12 +326,27 @@ async function main() {
             }
 
             while (!isDone) {
+                // Prepare messages for Claude: compress latest user input if possible
+                const messagesForClaude: any[] = [...messages];
+                try {
+                    const last = messagesForClaude[messagesForClaude.length - 1];
+                    if (last && last.role === "user" && typeof last.content === "string") {
+                        const compressed = await compressInput(last.content);
+                        if (compressed) {
+                            messagesForClaude[messagesForClaude.length - 1] = { role: "user", content: compressed };
+                            console.log("Applied input compression (bear-1).");
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Skipping compression due to error:", e);
+                }
+
                 // Get response from Claude
                 const completion = await anthropic.messages.create({
                     model: "claude-sonnet-4-5-20250929", // LOCKED: DO NOT CHANGE (User Request)
                     max_tokens: 1024,
                     system: currentSystemPrompt,
-                    messages: messages,
+                    messages: messagesForClaude,
                     tools: tools.length > 0 ? tools : undefined,
                 });
 
