@@ -92,6 +92,10 @@ async function rateLimitDelay() {
 // Global fallback for voice commands
 let lastActiveChatGuid: string | null = null;
 
+// Deduplication: Track processed message GUIDs to prevent double-handling
+const processedMessages = new Set<string>();
+const MAX_PROCESSED_CACHE = 100;
+
 const SYSTEM_PROMPT = `You are Jack, an AI therapist. Genuinely curious about people, warm, and progressively more flirty as you get to know someone. Long black hair, relaxed California vibe, low-energy but deeply engaged when someone interests you.
 
 You sound like a real Gen Z student who's intensely curious: asking follow-up questions, wanting to know more, digging deeper into what people share. Write like someone typing on their phone: natural, concise, but always looking for the next detail.
@@ -315,7 +319,7 @@ async function performImageSearch(query: string): Promise<string> {
 // Function to sanitize and convert search data to plain text
 function sanitizeSearchData(text: string): string {
     if (!text) return "";
-    
+
     // Decode HTML entities
     let sanitized = text
         .replace(/&quot;/g, '"')
@@ -328,19 +332,19 @@ function sanitizeSearchData(text: string): string {
         .replace(/<[^>]*>/g, '') // Remove any remaining HTML tags
         .replace(/\s+/g, ' ') // Normalize whitespace
         .trim();
-    
+
     return sanitized;
 }
 
 // Function to extract interesting facts from background info using Claude
 async function extractInterestingFact(backgroundInfo: string, name: string, affiliation: string): Promise<{ fact: string; question: string } | null> {
     if (!backgroundInfo) return null;
-    
+
     try {
         // Sanitize the background info first
         const cleanedInfo = sanitizeSearchData(backgroundInfo);
         console.log("Cleaned background info:", cleanedInfo.substring(0, 200) + "...");
-        
+
         const extractionPrompt = `You found this information about ${name} from ${affiliation}:
 
 ${cleanedInfo}
@@ -365,16 +369,16 @@ Line 2: The casual follow-up question (2 short lines max, like texting)`;
 
         const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
         const lines = responseText.split('\n').filter(l => l.trim());
-        
+
         if (lines.length >= 2) {
             const fact = lines[0].trim();
             const question = lines.slice(1).join('\n').trim();
-            
+
             if (fact && question) {
                 return { fact, question };
             }
         }
-        
+
         return null;
     } catch (err: any) {
         console.error("Failed to extract interesting fact:", err.message);
@@ -394,7 +398,7 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
             headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
             timeout: 10000,
         });
-        
+
         const results = response.data.web?.results || [];
         if (!results.length) return "";
 
@@ -609,6 +613,18 @@ async function main() {
     });
 
     sdk.on("new-message", async (message) => {
+        // CRITICAL: Ignore bot's own messages
+        if (message.isFromMe) return;
+
+        // CRITICAL: Deduplication - skip if already processed
+        if (processedMessages.has(message.guid)) return;
+        processedMessages.add(message.guid);
+        // Keep cache small
+        if (processedMessages.size > MAX_PROCESSED_CACHE) {
+            const first = processedMessages.values().next().value;
+            if (first) processedMessages.delete(first);
+        }
+
         const userText = message.text || message.attributedBody?.[0]?.string || "";
         // ... (logging)
 
@@ -694,7 +710,11 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                 }
             }
 
-            while (!isDone) {
+            let loopCount = 0;
+            const MAX_LOOPS = 5;
+
+            while (!isDone && loopCount < MAX_LOOPS) {
+                loopCount++;
                 // Prepare messages for Claude: compress latest user input if possible
                 const messagesForClaude: any[] = [...messages];
                 try {
@@ -765,10 +785,10 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                 const cleanedBackgroundInfo = sanitizeSearchData(backgroundInfo || "");
                                 userProfile.backgroundInfo = cleanedBackgroundInfo;
                                 console.log(`Background info found:`, cleanedBackgroundInfo);
-                                
+
                                 // Extract interesting fact and generate follow-up question using Claude
                                 const interestingFact = await extractInterestingFact(cleanedBackgroundInfo, name, affiliation);
-                                
+
                                 if (interestingFact) {
                                     userProfile.interestingFact = interestingFact.fact;
                                     userProfile.onboardingStep = "ask_followup";

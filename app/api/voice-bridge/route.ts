@@ -16,9 +16,12 @@ function getQueue(): any[] {
             return [];
         }
         const data = fs.readFileSync(DB_FILE, 'utf-8');
+        if (!data || !data.trim()) {
+            return [];
+        }
         return JSON.parse(data);
     } catch (e) {
-        console.error("Error reading queue:", e);
+        console.error("Error reading queue (resetting):", e);
         return [];
     }
 }
