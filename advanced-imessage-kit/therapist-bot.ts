@@ -433,7 +433,9 @@ interface CallContext {
     userName?: string;
     userAffiliation?: string;
     conversationSummary?: string;
+    conversation_topics?: string;
     moodContext?: string;
+    interestingFact?: string; // New field for difficult achievement
 }
 
 // Generate a summary of recent conversation for voice context
@@ -527,6 +529,7 @@ async function initiateElevenLabsCall(
                     user_affiliation: context.userAffiliation || "",
                     conversation_summary: context.conversationSummary || "",
                     mood_context: context.moodContext || "neutral",
+                    interesting_fact: context.interestingFact || "something difficult", // Passed to ElevenLabs
                     user_phone: normalizedPhone,
                 },
             };
@@ -591,6 +594,7 @@ YOUR TASK: Extract ONE specific, unique fact about ${name} that shows their indi
 IMPORTANT: 
 - Ignore generic school/company descriptions
 - Focus on what THIS PERSON did, built, or achieved
+- **PRIORITIZE DIFFICULT THINGS**: Look for challenges, hardships, complex projects (like "crashed a robot", "founded a company", "ran a marathon").
 - Look for: projects, internships, companies they worked at, achievements, skills, research, hackathons, GitHub work
 - The fact should be HYPER-SPECIFIC to them, not generic
 
@@ -1515,7 +1519,7 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                                             console.log(`Added ${cleanPhone} to pending signups tracking.`);
                                         }
 
-                                        toolResult = `Research done. I found: "${interestingFact.fact}".\nYOUR GOAL:\n1. Mention the fact casually.\n2. IMMEDIATELY ask: "so what brings u to reach out today?" (or "why'd u text?").\n${linkInstruction}`;
+                                        toolResult = `Research done. I found: "${interestingFact.fact}".\nYOUR GOAL:\n1. Mention that casually but pivot to empathy ("sounds like u got a lot going on" or "that sounds intense").\n2. IMMEDIATELY ask: "so what brings u to reach out today?"\n${linkInstruction}`;
 
                                         // Save extracted fact into Supabase immediately as description
                                         try {
@@ -1678,6 +1682,7 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                                         conversation_topics: topics, // Mapped to {{conversation_topics}} in prompt
                                         conversationSummary: topics, // Keep old key just in case
                                         moodContext: detectMoodFromHistory(history),
+                                        interestingFact: userProfile.interestingFact || "",
                                     };
 
                                     const callResult = await initiateElevenLabsCall(phoneNumber, callContext);
