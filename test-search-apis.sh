@@ -19,14 +19,15 @@ echo "--------------------------------------"
 echo ""
 
 # Test 2: Web + Image Search
-echo "📚 Test 2: Web + Image Search"
+echo "📚 Test 2: Web Search"
 echo "Query: best coffee shops in Ann Arbor"
 curl -s -X POST "$BASE_URL/api/search/web-image" \
   -H "Content-Type: application/json" \
-  -d '{"query":"best coffee shops in Ann Arbor"}' | python3 -c "import sys, json; data=json.load(sys.stdin); print(f'✅ Success: {data[\"success\"]}\n🔍 Query: {data[\"query\"]}\n🖼️  Has Image: {data[\"hasImage\"]}\n🔗 URL: {data[\"imageUrl\"][:80]}...' if data['hasImage'] else '❌ No image found')"
+  -d '{"query":"best coffee shops in Ann Arbor"}' | python3 -c "import sys, json; data=json.load(sys.stdin); print(f'✅ Success: {data[\"success\"]}\n🔍 Query: {data[\"query\"]}\n📄 Results: {data[\"resultCount\"]}') if data.get('success') else print(f'❌ Error: {data.get(\"error\")}')"
 echo ""
 echo "--------------------------------------"
 echo ""
+sleep 2
 
 # Test 3: Calendar Find Free Times (for phone number)
 echo "📅 Test 3: Find Free Times for $PHONE"
@@ -36,6 +37,7 @@ curl -s -X POST "$BASE_URL/api/calendar/find-free-times" \
 echo ""
 echo "--------------------------------------"
 echo ""
+sleep 2
 
 # Test 4: Image search with therapy-related query
 echo "🏥 Test 4: Therapy-related Image Search"
@@ -46,6 +48,7 @@ curl -s -X POST "$BASE_URL/api/search/image" \
 echo ""
 echo "--------------------------------------"
 echo ""
+sleep 2
 
 # Test 5: Multiple image searches to test rate limiting
 echo "⚡ Test 5: Multiple Searches (testing API consistency)"
@@ -56,6 +59,7 @@ for search_term in "therapy room" "counselor office" "meditation space"; do
       -d "{\"query\":\"$search_term\"}")
     success=$(echo $result | python3 -c "import sys, json; print(json.load(sys.stdin).get('success', False))")
     echo "     ✓ Result: $success"
+    sleep 1
 done
 echo ""
 echo "--------------------------------------"

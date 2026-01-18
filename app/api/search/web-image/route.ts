@@ -5,10 +5,10 @@ interface SearchInput {
     query: string
 }
 
-async function performImageSearch(query: string): Promise<string> {
+async function performWebSearch(query: string): Promise<any[]> {
     try {
-        const response = await axios.get("https://api.search.brave.com/res/v1/images/search", {
-            params: { q: query },
+        const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
+            params: { q: query, count: 3 },
             headers: {
                 Accept: "application/json",
                 "X-Subscription-Token": process.env.BRAVE_API_KEY
@@ -16,14 +16,10 @@ async function performImageSearch(query: string): Promise<string> {
             timeout: 10000,
         });
 
-        const images = response.data.results || [];
-        if (!images.length) return "";
-
-        // Use thumbnail.src for the image URL
-        return images[0].thumbnail?.src || images[0].url || "";
+        return response.data.web?.results || [];
     } catch (err: any) {
-        console.error("Image search failed:", err.message);
-        return "";
+        console.error("[Web Search] Failed:", err.message);
+        return [];
     }
 }
 
@@ -46,13 +42,20 @@ export async function POST(req: NextRequest) {
         }
 
         console.log(`[Web+Image Search] Searching for: "${query}"`);
-        const imageUrl = await performImageSearch(query);
+        
+        // Perform web search
+        const webResults = await performWebSearch(query);
+
+        // Format web results
+        const webContent = webResults
+            .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.description || "No description"}\nURL: ${r.url}`)
+            .join("\n\n");
 
         return NextResponse.json({
             success: true,
             query,
-            imageUrl,
-            hasImage: !!imageUrl
+            webResults: webContent,
+            resultCount: webResults.length
         });
 
     } catch (error: any) {
