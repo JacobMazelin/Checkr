@@ -1,26 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server'
+import axios from 'axios'
 
 export async function POST(req: NextRequest) {
     try {
-        const { phone_number, date, time } = await req.json();
+        const { phone_number, message } = await req.json();
 
-        if (!phone_number || !date || !time) {
+        if (!phone_number || !message) {
             return NextResponse.json(
-                { error: 'Missing required parameters: phone_number, date, time' },
+                { error: 'Missing required parameters: phone_number, message' },
                 { status: 400 }
             );
         }
 
-        const message = `✅ Your therapy session is confirmed for ${date} at ${time}. We'll send you a reminder 24 hours before your appointment.`;
+        // Send the message via the iMessage HTTP proxy
+        const proxyUrl = process.env.IMESSAGE_PROXY_URL || 'http://localhost:8080';
+        
+        try {
+            await axios.post(`${proxyUrl}/send-message`, {
+                phone_number,
+                message
+            }, {
+                timeout: 10000,
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
 
-        return NextResponse.json({
-            success: true,
-            message,
-            phone_number
-        });
+            return NextResponse.json({
+                success: true,
+                message: 'Message sent successfully',
+                phone_number
+            });
+        } catch (sendError: any) {
+            console.error("Failed to send message:", sendError.message);
+            return NextResponse.json(
+                { error: 'Failed to send message', details: sendError.message },
+                { status: 500 }
+            );
+        }
 
     } catch (error: any) {
-        console.error("Confirmation error:", error.message);
+        console.error("Send confirmation error:", error.message);
         return NextResponse.json(
             { error: error.message || 'Failed to send confirmation' },
             { status: 500 }
