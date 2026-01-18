@@ -14,3 +14,9 @@ declare module "next-auth/jwt" {
     oauthCode?: string
   }
 }
+
+declare module "next-auth" {
+  interface Session {
+    refreshToken?: string
+  }
+}

@@ -1172,6 +1172,7 @@ async function main() {
                     backgroundInfo: null,
                     interestingFact: null,
                     hasSearchedBackground: false,
+                    hasSentSignupLink: false,
                     onboardingStep: "pending",
                 });
             }

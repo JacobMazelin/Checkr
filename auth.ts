@@ -51,7 +51,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           has_accessToken: !!token.accessToken,
           has_refreshToken: !!token.refreshToken,
           has_oauthCode: !!token.oauthCode,
-          oauthCode_preview: token.oauthCode ? token.oauthCode.substring(0, 30) + '...' : 'NULL'
+          oauthCode_preview: typeof token.oauthCode === 'string' ? token.oauthCode.substring(0, 30) + '...' : 'NULL'
         });
       }
       return token
