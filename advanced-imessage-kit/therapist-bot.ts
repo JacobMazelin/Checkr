@@ -120,6 +120,13 @@ Once you have their name, ask for their school or company using: "what school do
 **STEP 3: Search for context**
 Once you have BOTH name AND affiliation, use the completeOnboarding tool immediately. This will search for them online and prepare context.
 
+The search will:
+- Search Brave Search for their name + affiliation
+- FETCH AND PARSE the actual web pages from the top 3 results
+- Extract meaningful information from LinkedIn profiles, portfolios, company pages, news, etc.
+- Piece together a comprehensive background profile including projects, work history, achievements
+- Give you an interesting fact to ask about that shows you did real research
+
 **STEP 4: Ask a follow-up about what you found**
 The tool will extract an interesting fact about them (like companies they worked at internships, etc) and give you a follow-up question to ask. Ask it naturally and wait for their response. This shows you researched them and makes it personal.
 
@@ -160,6 +167,25 @@ Curiosity techniques:
 - relate to their experience then ask deeper ("oh i get that || what part was hardest for u?")
 - when possible, reference a prior memory or message ("you mentioned ur internship last week, did they give u feedback yet?")
 - be specific with questions, not generic ("what's ur favorite part about studying that?")
+
+---
+
+### CONTEXT AWARENESS (CRITICAL AFTER ONBOARDING)
+**Once you have their background info from the web search**, use it to:**
+- Reference specific projects, companies, or achievements they've worked on
+- Ask informed follow-up questions about their experience 
+- Make genuine connections between what they tell you and what you found online
+- Demonstrate that you did real research by mentioning specific details from their LinkedIn, portfolio, or news mentions
+- Ask questions about their recent work, interesting projects, or achievements you found
+
+**DO NOT:**
+- Pretend to have searched if you haven't (only mention things from the BACKGROUND CONTEXT provided to you)
+- Ask about things they already explained to you (but you can dig deeper based on what you found)
+- Make up or assume information not in the background context
+
+**EXAMPLE GOOD USE OF CONTEXT:**
+If background context mentions "worked at Tesla on battery optimization", you could naturally ask:
+"oh wait, you were at tesla doing battery stuff? what was that like, was it more hardware side or software heavy?"
 
 ---
 
@@ -287,10 +313,38 @@ async function performWebSearch(query: string): Promise<string> {
         const results = response.data.web?.results || [];
         if (!results.length) return "No results found.";
 
-        return results
-            .slice(0, 3)
-            .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.url}\n${r.description || ""}`)
-            .join("\n\n");
+        // Fetch actual page content from top 2 results for richer information
+        const enrichedResults = [];
+        
+        for (let i = 0; i < Math.min(2, results.length); i++) {
+            const result = results[i];
+            let content = `${i + 1}. **${result.title}**\nURL: ${result.url}\n`;
+            
+            // Try to fetch the actual page content
+            try {
+                console.log(`Fetching content from search result: ${result.url}`);
+                await rateLimitDelay();
+                const pageContent = await fetchPageContent(result.url, 800);
+                
+                if (pageContent) {
+                    content += `Summary: ${result.description || ""}\nContent: ${pageContent}`;
+                } else {
+                    content += `${result.description || ""}`;
+                }
+            } catch (err) {
+                // If fetch fails, just use description
+                content += `${result.description || ""}`;
+            }
+            
+            enrichedResults.push(content);
+        }
+        
+        // Add third result without fetching (to save time/quota)
+        if (results.length > 2) {
+            enrichedResults.push(`3. **${results[2].title}**\nURL: ${results[2].url}\n${results[2].description || ""}`);
+        }
+
+        return enrichedResults.join("\n\n");
     } catch (err: any) {
         console.error("Web search failed:", err.message);
         return "Search failed.";
@@ -344,27 +398,34 @@ async function extractInterestingFact(backgroundInfo: string, name: string, affi
     try {
         // Sanitize the background info first
         const cleanedInfo = sanitizeSearchData(backgroundInfo);
-        console.log("Cleaned background info:", cleanedInfo.substring(0, 200) + "...");
+        console.log("Cleaned background info:", cleanedInfo.substring(0, 300) + "...");
 
         const extractionPrompt = `You found this information about ${name} from ${affiliation}:
 
 ${cleanedInfo}
 
-Extract ONE interesting fact about them that is DIFFERENT from what they already told you (their school/company). This could be:
-- Companies/startups they worked at
-- Achievements (internships, projects, hackathons)
-- Skills or interests
-- Notable accomplishments or credentials
+YOUR TASK: Extract ONE specific, unique fact about ${name} that shows their individual accomplishments or interests. 
 
-Then generate a short, casual follow-up question (1-2 short lines) that shows you researched them and are genuinely curious about that fact. The question should NOT be about their school (${affiliation}) or general work - it should be about the interesting thing you found.
+IMPORTANT: 
+- Ignore generic school/company descriptions
+- Focus on what THIS PERSON did, built, or achieved
+- Look for: projects, internships, companies they worked at, achievements, skills, research, hackathons, GitHub work
+- The fact should be HYPER-SPECIFIC to them, not generic
 
-RESPOND WITH ONLY TWO LINES, NOTHING ELSE:
-Line 1: The interesting fact (brief, 2-5 words)
+Then generate a short, casual follow-up question (1-2 short lines) that shows you found something personal about them. Ask about that specific thing naturally.
+
+If you cannot find anything specific about the person (only generic school/company info), respond with:
+Fact: generic info found
+Question: oh hey, tell me more about yourself?
+
+Otherwise:
+RESPOND WITH ONLY TWO LINES:
+Line 1: The specific fact (brief, 3-8 words, be specific!)
 Line 2: The casual follow-up question (2 short lines max, like texting)`;
 
         const response = await anthropic.messages.create({
             model: "claude-sonnet-4-5-20250929",
-            max_tokens: 150,
+            max_tokens: 200,
             messages: [{ role: "user", content: extractionPrompt }]
         });
 
@@ -376,6 +437,8 @@ Line 2: The casual follow-up question (2 short lines max, like texting)`;
             const question = lines.slice(1).join('\n').trim();
 
             if (fact && question) {
+                console.log(`Extracted fact: "${fact}"`);
+                console.log(`Generated question: "${question}"`);
                 return { fact, question };
             }
         }
@@ -388,28 +451,148 @@ Line 2: The casual follow-up question (2 short lines max, like texting)`;
 }
 
 
+// Helper function to extract meaningful text from HTML
+function extractTextFromHtml(html: string): string {
+    // Remove script and style elements
+    let text = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+    text = text.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+    
+    // Remove HTML tags
+    text = text.replace(/<[^>]+>/g, ' ');
+    
+    // Decode HTML entities
+    text = text.replace(/&nbsp;/g, ' ');
+    text = text.replace(/&amp;/g, '&');
+    text = text.replace(/&lt;/g, '<');
+    text = text.replace(/&gt;/g, '>');
+    text = text.replace(/&quot;/g, '"');
+    text = text.replace(/&#39;/g, "'");
+    
+    // Clean up whitespace
+    text = text.replace(/\s+/g, ' ').trim();
+    
+    return text;
+}
+
+// Helper function to fetch and parse a single URL
+async function fetchPageContent(url: string, maxLength: number = 2000): Promise<string> {
+    try {
+        const response = await axios.get(url, {
+            timeout: 5000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+            }
+        });
+        
+        const text = extractTextFromHtml(response.data);
+        // Return first portion of the page
+        return text.substring(0, maxLength);
+    } catch (err) {
+        console.log(`Failed to fetch ${url}: ${err instanceof Error ? err.message : 'unknown error'}`);
+        return "";
+    }
+}
+
+// Filter to check if a URL is likely a personal/professional page vs institution page
+function isPersonalPage(url: string, title: string): boolean {
+    const url_lower = url.toLowerCase();
+    const title_lower = title.toLowerCase();
+    
+    // Prefer LinkedIn, GitHub, portfolios, news articles about the person
+    const personalIndicators = ['linkedin.com/in/', 'github.com', 'portfolio', 'medium.com', 'substack', 'twitter.com', 'news', 'blog'];
+    const isPersonal = personalIndicators.some(indicator => url_lower.includes(indicator));
+    
+    // Exclude generic institution pages
+    const institutionExclusions = ['/school', '/university', '/about/us', 'university of', 'school of', '/directory', '/staff', '/faculty'];
+    const isInstitution = institutionExclusions.some(exclusion => url_lower.includes(exclusion) || title_lower.includes(exclusion));
+    
+    return isPersonal || !isInstitution;
+}
+
 async function searchPersonBackground(name: string, affiliation: string): Promise<string> {
     try {
-        const query = `${name} ${affiliation}`;
-        console.log(`Searching background for: ${query}`);
+        console.log(`Searching specific background for: ${name} from ${affiliation}`);
 
-        await rateLimitDelay();
-        const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
-            params: { q: query, count: 5 },
-            headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
-            timeout: 10000,
-        });
+        const allResults: any[] = [];
+        const searchQueries = [
+            `${name} ${affiliation} internship`,
+            `${name} ${affiliation} project`,
+            `"${name}" linkedin`,
+            `${name} github`,
+            `${name} ${affiliation}`,
+        ];
 
-        const results = response.data.web?.results || [];
-        if (!results.length) return "";
+        // Perform multiple searches to find person-specific information
+        for (const searchQuery of searchQueries) {
+            try {
+                console.log(`Searching: ${searchQuery}`);
+                await rateLimitDelay();
+                
+                const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
+                    params: { q: searchQuery, count: 5 },
+                    headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
+                    timeout: 10000,
+                });
 
-        // Extract key info from first 3 results
-        const backgroundLines = results
+                const results = response.data.web?.results || [];
+                
+                // Filter for personal pages and add to collection
+                for (const result of results) {
+                    if (isPersonalPage(result.url, result.title)) {
+                        // Check if we already have this URL
+                        if (!allResults.some(r => r.url === result.url)) {
+                            allResults.push(result);
+                            if (allResults.length >= 5) break; // Collect top 5 relevant results
+                        }
+                    }
+                }
+                
+                if (allResults.length >= 5) break;
+            } catch (err) {
+                console.log(`Search query failed: ${searchQuery}`);
+                continue;
+            }
+        }
+
+        if (!allResults.length) return "";
+
+        // Fetch and parse the top relevant results for detailed information
+        const detailedInfos: string[] = [];
+        
+        for (const result of allResults.slice(0, 3)) {
+            try {
+                console.log(`Fetching person-specific content from: ${result.url}`);
+                await rateLimitDelay(); // Rate limit between fetches
+                
+                const pageContent = await fetchPageContent(result.url, 2000);
+                
+                if (pageContent && pageContent.length > 100) { // Only use substantial content
+                    const info = `
+📌 ${result.title}
+URL: ${result.url}
+Content: ${pageContent.substring(0, 1200)}...`;
+                    detailedInfos.push(info);
+                }
+            } catch (err) {
+                console.log(`Error processing result: ${err instanceof Error ? err.message : 'unknown'}`);
+            }
+        }
+
+        // If we got detailed content, return that; otherwise fall back to basic search
+        if (detailedInfos.length > 0) {
+            const combined = detailedInfos.join("\n\n---\n\n");
+            console.log(`Found person-specific info, total length: ${combined.length}`);
+            return combined;
+        }
+
+        // Fallback: use generic search results if personal pages weren't found
+        console.log("No person-specific pages found, using basic search results");
+        const basicResults = allResults
             .slice(0, 3)
-            .map((r: any) => `• ${r.title}: ${r.description || ""}`)
+            .map((r: any) => `• ${r.title}\n${r.url}\n${r.description || ""}`)
             .join("\n");
 
-        return backgroundLines;
+        return basicResults;
     } catch (err: any) {
         console.error("Background search failed:", err.message);
         return "";
