@@ -1,6 +1,5 @@
 import { Tool, Resource, Prompt, SchemaConstraint, Optional } from "@leanmcp/core";
 import axios from "axios";
-import { search, SafeSearchType } from "duck-duck-scrape";
 
 class WebSearchInput {
   @SchemaConstraint({ description: "The query to search for" })
@@ -14,26 +13,40 @@ class MapSearchInput {
 
 export class GeneralTools {
   @Tool({
-    description: "Search the internet for information using DuckDuckGo (Free)",
+    description: "Search the internet for information using Brave Search",
     inputClass: WebSearchInput
   })
   async webSearch(input: WebSearchInput) {
     try {
-      console.log(`[MCP Search Tool] Searching DuckDuckGo for: "${input.query}"`);
-      const results = await search(input.query, {
-        safeSearch: SafeSearchType.MODERATE
+      const braveApiKey = process.env.BRAVE_API_KEY;
+      if (!braveApiKey) {
+        console.error("[MCP Search Tool] BRAVE_API_KEY not configured");
+        return {
+          content: [{ type: "text" as const, text: "Search service not configured. Please set BRAVE_API_KEY." }]
+        };
+      }
+
+      console.log(`[MCP Search Tool] Searching Brave for: "${input.query}"`);
+      const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
+        params: { q: input.query, count: 5 },
+        headers: {
+          Accept: "application/json",
+          "X-Subscription-Token": braveApiKey
+        },
+        timeout: 10000
       });
 
-      console.log(`[MCP Search Tool] Found ${results?.results?.length || 0} results`);
-      
-      if (!results.results || results.results.length === 0) {
+      const results = response.data.web?.results || [];
+      console.log(`[MCP Search Tool] Found ${results.length} results`);
+
+      if (!results || results.length === 0) {
         return {
           content: [{ type: "text" as const, text: "No results found for: " + input.query }]
         };
       }
 
       // Format top 3 results
-      const formattedResults = results.results.slice(0, 3).map((r: any) =>
+      const formattedResults = results.slice(0, 3).map((r: any) =>
         `Title: ${r.title}\nLink: ${r.url}\nSnippet: ${r.description}`
       ).join("\n\n");
 
@@ -41,7 +54,7 @@ export class GeneralTools {
         content: [{ type: "text" as const, text: formattedResults }]
       };
     } catch (error: any) {
-      console.error("[MCP Search Tool] DuckDuckGo search failed:", error.message);
+      console.error("[MCP Search Tool] Brave search failed:", error.message);
       return {
         content: [{ type: "text" as const, text: `Search failed: ${error.message}` }]
       };

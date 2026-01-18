@@ -26,8 +26,7 @@
     "@leanmcp/ui": "^0.2.1",
     "@supabase/supabase-js": "^2.90.1",
     "axios": "^1.13.2",
-    "dotenv": "^16.5.0",
-    "duck-duck-scrape": "^2.2.7"
+    "dotenv": "^16.5.0"
   },
   "devDependencies": {
     "@leanmcp/cli": "^0.4.0",
