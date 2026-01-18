@@ -23,15 +23,7 @@ export async function POST(req: NextRequest) {
       .single()
 
     if (existing) {
-      // If OAuth code is already set, return already exists
-      if (existing.oauthcode) {
-        return NextResponse.json(
-          { success: true, alreadyExists: true },
-          { status: 200 }
-        )
-      }
-      
-      // Otherwise, update the existing row with the OAuth code
+      // Always update with the new OAuth code (allow re-authentication)
       const { data: updated, error: updateError } = await supabaseServer
         .from('checkrdata')
         .update({ oauthcode: oauthCode })

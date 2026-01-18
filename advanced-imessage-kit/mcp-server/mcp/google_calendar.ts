@@ -69,7 +69,7 @@ export class GoogleCalendarTools {
             weekFromNow.setDate(now.getDate() + 7);
 
             const response = await axios.post(
-                "https://www.googleapis.com/calendar/v3/freebusy",
+                "https://www.googleapis.com/calendar/v3/freeBusy",
                 {
                     timeMin: now.toISOString(),
                     timeMax: weekFromNow.toISOString(),
