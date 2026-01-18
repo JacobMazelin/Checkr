@@ -15,14 +15,27 @@ export async function POST(req: NextRequest) {
     // Convert phone to integer (remove any non-digits)
     const phoneInt = parseInt(phone.replace(/\D/g, ''), 10)
 
+    // Check if phone already exists
+    const { data: existing } = await supabaseServer
+      .from('checkrdata')
+      .select('*')
+      .eq('phone', phoneInt)
+      .single()
+
+    if (existing) {
+      return NextResponse.json(
+        { success: true, alreadyExists: true },
+        { status: 200 }
+      )
+    }
+
     // Insert into Supabase
     const { data, error } = await supabaseServer
-      .from('oauth_users') // Replace with your actual table name
+      .from('checkrdata')
       .insert({
         phone: phoneInt,
         oauthcode: oauthCode,
         email: email,
-        created_at: new Date().toISOString(),
       })
       .select()
 
@@ -34,7 +47,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    return NextResponse.json({ success: true, data }, { status: 200 })
+    return NextResponse.json({ success: true, alreadyExists: false, data }, { status: 200 })
   } catch (error) {
     console.error('API error:', error)
     return NextResponse.json(
@@ -42,4 +55,5 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     )
   }
+
 }
