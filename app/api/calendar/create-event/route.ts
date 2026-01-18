@@ -18,6 +18,56 @@ async function getOAuthToken(phoneNumber: string): Promise<string> {
     return data.oauthcode;
 }
 
+async function getOrCreateTherapyCalendar(token: string, phoneNumber: string): Promise<string> {
+    try {
+        // Check if we have a stored calendar ID in Supabase
+        const phoneInt = parseInt(phoneNumber.replace(/\D/g, ''), 10);
+        const { data: existing } = await supabaseServer
+            .from('checkrdata')
+            .select('description')
+            .eq('phone', phoneInt)
+            .single();
+
+        // If we have a calendar ID stored in description field, use it
+        if (existing?.description && existing.description.startsWith('cal_')) {
+            const calendarId = existing.description.substring(4); // Remove 'cal_' prefix
+            console.log(`[Calendar] Using stored calendar ID: ${calendarId}`);
+            return calendarId;
+        }
+
+        // Create new secondary calendar for therapy sessions
+        console.log(`[Calendar] Creating new therapy calendar...`);
+        const createResponse = await axios.post(
+            "https://www.googleapis.com/calendar/v3/calendars",
+            {
+                summary: "Therapy Sessions",
+                description: "Calendar for scheduled therapy appointments",
+                timeZone: "America/New_York"
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                }
+            }
+        );
+
+        const calendarId = createResponse.data.id;
+        console.log(`[Calendar] Created new calendar: ${calendarId}`);
+
+        // Store calendar ID in Supabase (prefix with 'cal_' to distinguish from description text)
+        await supabaseServer
+            .from('checkrdata')
+            .update({ description: `cal_${calendarId}` })
+            .eq('phone', phoneInt);
+
+        return calendarId;
+    } catch (error: any) {
+        console.error("[Calendar] Error getting/creating calendar:", error.response?.data || error.message);
+        throw error;
+    }
+}
+
 function parseDateTime(dateStr: string, timeStr: string): Date {
     // Parse date like "Mon, Jan 19" or "Jan 19"
     const year = new Date().getFullYear();
@@ -62,6 +112,9 @@ export async function POST(req: NextRequest) {
         console.log(`[Create Event] Creating event for ${phone_number}`);
         console.log(`[Create Event] Date: ${date}, Time: ${time}`);
         
+        // Get or create the therapy calendar
+        const calendarId = await getOrCreateTherapyCalendar(token, phone_number);
+        
         const startTime = parseDateTime(date, time);
         const endTime = new Date(startTime);
         endTime.setHours(startTime.getHours() + 1);
@@ -82,9 +135,9 @@ export async function POST(req: NextRequest) {
             }
         };
 
-        console.log(`[Create Event] Calling Google Calendar API...`);
+        console.log(`[Create Event] Calling Google Calendar API with calendar ID: ${calendarId}...`);
         const response = await axios.post(
-            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
             event,
             {
                 headers: {
