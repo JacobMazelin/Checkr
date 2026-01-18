@@ -24,6 +24,18 @@
       "dest": "/api/save-oauth"
     },
     {
+      "src": "/api/calendar/find-free-times",
+      "dest": "/api/calendar/find-free-times"
+    },
+    {
+      "src": "/api/calendar/create-event",
+      "dest": "/api/calendar/create-event"
+    },
+    {
+      "src": "/api/calendar/send-confirmation",
+      "dest": "/api/calendar/send-confirmation"
+    },
+    {
       "src": "/api/voice-bridge",
       "dest": "/api/voice-bridge"
     },
