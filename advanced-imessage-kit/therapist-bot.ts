@@ -44,6 +44,7 @@ interface UserProfile {
     affiliation: string | null;
     backgroundInfo: string | null;
     interestingFact: string | null;
+    hasSearchedBackground: boolean;
     onboardingStep: "pending" | "asked_name" | "asked_affiliation" | "searching" | "ask_followup" | "needs_signup" | "completed";
 }
 
@@ -58,6 +59,7 @@ function getOrCreateUserProfile(phoneNumber: string): UserProfile {
             affiliation: null,
             backgroundInfo: null,
             interestingFact: null,
+            hasSearchedBackground: false,
             onboardingStep: "pending",
         });
     }
@@ -70,6 +72,7 @@ const userProfile: UserProfile = {
     affiliation: null,
     backgroundInfo: null,
     interestingFact: null,
+    hasSearchedBackground: false,
     onboardingStep: "pending",
 };
 
@@ -299,6 +302,39 @@ async function compressInput(input: string): Promise<string | null> {
     }
 }
 
+// Ensure Anthropic messages do not contain empty content
+function sanitizeAnthropicMessages(msgs: any[]): any[] {
+    const cleaned: any[] = [];
+    for (const m of msgs || []) {
+        if (!m || !m.role) continue;
+        // content can be string or array of blocks
+        if (typeof m.content === "string") {
+            const text = (m.content || "").toString().trim();
+            if (text.length === 0) continue;
+            cleaned.push({ role: m.role, content: text });
+        } else if (Array.isArray(m.content)) {
+            const blocks = m.content
+                .map((b: any) => {
+                    if (!b || !b.type) return null;
+                    if (b.type === "text") {
+                        const t = (b.text || "").toString().trim();
+                        if (t.length === 0) return null;
+                        return { type: "text", text: t };
+                    }
+                    // Keep other block types (tool_use, image, tool_result) as-is
+                    return b;
+                })
+                .filter(Boolean);
+            if (blocks.length === 0) continue;
+            cleaned.push({ role: m.role, content: blocks });
+        } else {
+            // Unknown content type – skip
+            continue;
+        }
+    }
+    return cleaned;
+}
+
 
 // Helper functions for web search and image search
 async function performWebSearch(query: string): Promise<string> {
@@ -313,38 +349,11 @@ async function performWebSearch(query: string): Promise<string> {
         const results = response.data.web?.results || [];
         if (!results.length) return "No results found.";
 
-        // Fetch actual page content from top 2 results for richer information
-        const enrichedResults = [];
-        
-        for (let i = 0; i < Math.min(2, results.length); i++) {
-            const result = results[i];
-            let content = `${i + 1}. **${result.title}**\nURL: ${result.url}\n`;
-            
-            // Try to fetch the actual page content
-            try {
-                console.log(`Fetching content from search result: ${result.url}`);
-                await rateLimitDelay();
-                const pageContent = await fetchPageContent(result.url, 800);
-                
-                if (pageContent) {
-                    content += `Summary: ${result.description || ""}\nContent: ${pageContent}`;
-                } else {
-                    content += `${result.description || ""}`;
-                }
-            } catch (err) {
-                // If fetch fails, just use description
-                content += `${result.description || ""}`;
-            }
-            
-            enrichedResults.push(content);
-        }
-        
-        // Add third result without fetching (to save time/quota)
-        if (results.length > 2) {
-            enrichedResults.push(`3. **${results[2].title}**\nURL: ${results[2].url}\n${results[2].description || ""}`);
-        }
-
-        return enrichedResults.join("\n\n");
+        // Use search result metadata directly (title + description)
+        return results
+            .slice(0, 3)
+            .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.description || "No description"}\nURL: ${r.url}`)
+            .join("\n\n");
     } catch (err: any) {
         console.error("Web search failed:", err.message);
         return "Search failed.";
@@ -451,47 +460,7 @@ Line 2: The casual follow-up question (2 short lines max, like texting)`;
 }
 
 
-// Helper function to extract meaningful text from HTML
-function extractTextFromHtml(html: string): string {
-    // Remove script and style elements
-    let text = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-    text = text.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-    
-    // Remove HTML tags
-    text = text.replace(/<[^>]+>/g, ' ');
-    
-    // Decode HTML entities
-    text = text.replace(/&nbsp;/g, ' ');
-    text = text.replace(/&amp;/g, '&');
-    text = text.replace(/&lt;/g, '<');
-    text = text.replace(/&gt;/g, '>');
-    text = text.replace(/&quot;/g, '"');
-    text = text.replace(/&#39;/g, "'");
-    
-    // Clean up whitespace
-    text = text.replace(/\s+/g, ' ').trim();
-    
-    return text;
-}
 
-// Helper function to fetch and parse a single URL
-async function fetchPageContent(url: string, maxLength: number = 2000): Promise<string> {
-    try {
-        const response = await axios.get(url, {
-            timeout: 5000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-            }
-        });
-        
-        const text = extractTextFromHtml(response.data);
-        // Return first portion of the page
-        return text.substring(0, maxLength);
-    } catch (err) {
-        console.log(`Failed to fetch ${url}: ${err instanceof Error ? err.message : 'unknown error'}`);
-        return "";
-    }
-}
 
 // Filter to check if a URL is likely a personal/professional page vs institution page
 function isPersonalPage(url: string, title: string): boolean {
@@ -511,7 +480,7 @@ function isPersonalPage(url: string, title: string): boolean {
 
 async function searchPersonBackground(name: string, affiliation: string): Promise<string> {
     try {
-        console.log(`Searching specific background for: ${name} from ${affiliation}`);
+        console.log(`Searching background for: ${name} from ${affiliation}`);
 
         const allResults: any[] = [];
         const searchQueries = [
@@ -556,43 +525,14 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
 
         if (!allResults.length) return "";
 
-        // Fetch and parse the top relevant results for detailed information
-        const detailedInfos: string[] = [];
-        
-        for (const result of allResults.slice(0, 3)) {
-            try {
-                console.log(`Fetching person-specific content from: ${result.url}`);
-                await rateLimitDelay(); // Rate limit between fetches
-                
-                const pageContent = await fetchPageContent(result.url, 2000);
-                
-                if (pageContent && pageContent.length > 100) { // Only use substantial content
-                    const info = `
-📌 ${result.title}
-URL: ${result.url}
-Content: ${pageContent.substring(0, 1200)}...`;
-                    detailedInfos.push(info);
-                }
-            } catch (err) {
-                console.log(`Error processing result: ${err instanceof Error ? err.message : 'unknown'}`);
-            }
-        }
-
-        // If we got detailed content, return that; otherwise fall back to basic search
-        if (detailedInfos.length > 0) {
-            const combined = detailedInfos.join("\n\n---\n\n");
-            console.log(`Found person-specific info, total length: ${combined.length}`);
-            return combined;
-        }
-
-        // Fallback: use generic search results if personal pages weren't found
-        console.log("No person-specific pages found, using basic search results");
-        const basicResults = allResults
+        // Use search result metadata directly (title + description)
+        const backgroundLines = allResults
             .slice(0, 3)
-            .map((r: any) => `• ${r.title}\n${r.url}\n${r.description || ""}`)
-            .join("\n");
+            .map((r: any) => `📌 ${r.title}\n${r.description || "No description available"}\nURL: ${r.url}`)
+            .join("\n\n---\n\n");
 
-        return basicResults;
+        console.log(`Found ${allResults.length} person-specific results`);
+        return backgroundLines;
     } catch (err: any) {
         console.error("Background search failed:", err.message);
         return "";
@@ -607,17 +547,24 @@ async function saveUserToSupabase(
     backgroundInfo?: string
 ): Promise<boolean> {
     try {
+        if (!supabaseServer) {
+            console.error("Supabase client not initialized - missing env vars?");
+            return false;
+        }
+
         const cleanPhone = phoneNumber.replace("+", "");
+
+        // Persist richer context: name + work + description
+        const description = (backgroundInfo || "").trim() || `${name} (${work})`;
+
+        const record = {
+            phone: cleanPhone,
+            description,
+        } as const;
 
         const { data, error } = await supabaseServer
             .from("checkrdata")
-            .upsert(
-                {
-                    phone_number: cleanPhone,
-                    description: backgroundInfo || null,
-                },
-                { onConflict: "phone_number" }
-            );
+            .upsert(record, { onConflict: "phone" });
 
         if (error) {
             console.error("Supabase save error:", error);
@@ -903,6 +850,16 @@ async function main() {
                 userProfile.onboardingStep = "needs_signup";
             }
 
+            // Auto-transition from needs_signup to learning_more after user responds
+            if (userProfile.onboardingStep === "needs_signup" && history.length > 1) {
+                // Only transition if they've sent at least one message after the signup prompt
+                const recentMessages = history.slice(-2); // Last 2 messages
+                if (recentMessages.length >= 2 && recentMessages[recentMessages.length - 1].role === "user") {
+                    console.log("User acknowledged signup, moving to learning phase...");
+                    userProfile.onboardingStep = "learning_more";
+                }
+            }
+
             const messages: any[] = [...history];
             let isDone = false;
             let finalReplyText = "";
@@ -918,21 +875,33 @@ async function main() {
             } else if (userProfile.onboardingStep === "asked_name" && userProfile.name && !userProfile.affiliation) {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You got their name (${userProfile.name}). First, ask them something VERY SPECIFIC and relevant to them based on what they might do or their interests - show you're genuinely curious. Then ask where they work or go to school using "where do you work?" or "what school do you go to?" (not "rn").`;
             } else if (userProfile.onboardingStep === "ask_followup") {
-                currentSystemPrompt += `\n\n**ONBOARDING STATUS - FOLLOW-UP:** You searched for ${userProfile.name} at ${userProfile.affiliation} and found something cool about them (${userProfile.interestingFact}). Now ask them a personalized follow-up question about it to show you really did your research. Keep it casual and show genuine curiosity. Wait for their response before moving to the sign-up step.`;
+                currentSystemPrompt += `\n\n**ONBOARDING STATUS - FOLLOW-UP:** you already looked them up and found something (${userProfile.interestingFact}). ask a personalized follow-up question about it. do NOT call completeOnboarding again.`;
             } else if (userProfile.onboardingStep === "needs_signup") {
                 const signupLink = `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`;
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS - SEND SIGN-UP LINK NOW:**
-They just responded to your follow-up question. Now it's time to get them signed up for calendar access.
+they replied — now guide them calmly to sign up for access
 
-Your NEXT message should:
-1. Acknowledge their response briefly (1 short line)
-2. Tell them "hey u gotta sign up to book appointments" 
-3. Send the link on its own line using this exact format: [LINK: ${signupLink}]
+your next message:
+1. acknowledge their reply briefly (1 short line)
+2. explain gently: "to book appointments you'll need to sign up"
+3. send the link on its own line using: [LINK: ${signupLink}]
 
-Example format:
-"oh nice || hey u gotta sign up to book appointments || [LINK: ${signupLink}]"
+example:
+"got it || to book appointments you'll need to sign up || [LINK: ${signupLink}]"
 
-After they acknowledge signing up, use the finalizeOnboarding tool.`;
+after they acknowledge, use the finalizeOnboarding tool.`;
+            } else if (userProfile.onboardingStep === "learning_more") {
+                currentSystemPrompt += `\n\n**LEARNING PHASE - ASK DISCOVERY QUESTIONS:**
+${userProfile.name} just signed up! now learn more about what's going on with them.
+
+ask 2-3 natural follow-up questions to understand their situation better:
+- what's on their mind right now?
+- what are they struggling with?
+- what brought them here?
+
+be conversational and empathetic. show you care. if they express interest in talking to you or booking an appointment, note it — they might use words like "yeah let's talk", "i want to call", "let's do a call", "book me", "schedule", etc.
+
+keep it chill and brief (1-2 short lines per message).`;
             } else if (userProfile.onboardingStep === "completed") {
                 currentSystemPrompt += `\n\n**USER PROFILE:**\nName: ${userProfile.name}\nAffiliation: ${userProfile.affiliation}`;
                 if (userProfile.backgroundInfo) {
@@ -960,14 +929,32 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                     console.warn("Skipping compression due to error:", e);
                 }
 
-                // Get response from Claude
-                const completion = await anthropic.messages.create({
-                    model: "claude-sonnet-4-5-20250929", // LOCKED: DO NOT CHANGE (User Request)
-                    max_tokens: 1024,
-                    system: currentSystemPrompt,
-                    messages: messagesForClaude,
-                    tools: tools.length > 0 ? tools : undefined,
-                });
+                // Get response from Claude (with message sanitization and error handling)
+                const safeMessages = sanitizeAnthropicMessages(messagesForClaude);
+                if (safeMessages.length === 0) {
+                    console.warn("No valid messages to send to Claude; skipping LLM call.");
+                    finalReplyText = "";
+                    // Let the outer flow continue (e.g., fallback link in needs_signup)
+                    isDone = true;
+                    break;
+                }
+
+                let completion: any;
+                try {
+                    completion = await anthropic.messages.create({
+                        model: "claude-sonnet-4-5-20250929", // LOCKED: DO NOT CHANGE (User Request)
+                        max_tokens: 1024,
+                        system: currentSystemPrompt,
+                        messages: safeMessages,
+                        tools: tools.length > 0 ? tools : undefined,
+                    });
+                } catch (err: any) {
+                    console.error("Anthropic API call failed:", err?.error || err?.message || String(err));
+                    // Gracefully exit the loop so downstream fallback (e.g., signup link) can still run
+                    finalReplyText = "";
+                    isDone = true;
+                    break;
+                }
 
                 // Check stop reason
                 if (completion.stop_reason === "tool_use") {
@@ -1005,11 +992,22 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                 const name = args.name;
                                 const affiliation = args.affiliation;
 
+                                // Prevent duplicate searches: only run once per user
+                                if (userProfile.hasSearchedBackground) {
+                                    console.log("Skipping background search: already completed for this user.");
+                                    toolResult = `already looked u up earlier, let's keep chatting`; // keep it casual
+                                    // Move to follow-up if not already there
+                                    if (userProfile.onboardingStep === "searching") {
+                                        userProfile.onboardingStep = "ask_followup";
+                                    }
+                                    // Do not break; ensure we still return a tool_result for this tool_use
+                                }
+
                                 // Update the user profile
                                 userProfile.name = name;
                                 userProfile.affiliation = affiliation;
                                 userProfile.onboardingStep = "searching";
-                                // Search for background context and fun facts
+                                // Search for background context and fun facts (only once)
                                 console.log(`Searching for context: ${name} ${affiliation}`);
                                 const backgroundInfo = await searchPersonBackground(name, affiliation);
                                 const cleanedBackgroundInfo = sanitizeSearchData(backgroundInfo || "");
@@ -1021,13 +1019,29 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
 
                                 if (interestingFact) {
                                     userProfile.interestingFact = interestingFact.fact;
+                                    userProfile.hasSearchedBackground = true;
                                     userProfile.onboardingStep = "ask_followup";
                                     toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"`;
+
+                                    // Save extracted fact into Supabase immediately as description
+                                    try {
+                                        const phoneNumber = message.handle?.address || "unknown";
+                                        const saved = await saveUserToSupabase(
+                                            phoneNumber,
+                                            userProfile.name || name || "",
+                                            userProfile.affiliation || affiliation || "",
+                                            interestingFact.fact
+                                        );
+                                        console.log("Saved fact to Supabase during onboarding:", saved);
+                                    } catch (e: any) {
+                                        console.warn("Failed to save fact to Supabase:", e.message);
+                                    }
                                 } else {
                                     // Fallback: move to signup step if no interesting fact found
                                     const phoneNumber = message.handle?.address || "unknown";
                                     const cleanPhone = phoneNumber.replace("+", "");
                                     const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
+                                    userProfile.hasSearchedBackground = true;
                                     userProfile.onboardingStep = "needs_signup";
                                     toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
                                 }
@@ -1136,6 +1150,10 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
             let reactionType = "";
             let imageToDownload = "";
             let linkToSend = "";
+            // Fallback signup link for current state, in case LLM omits [LINK: ...]
+            const signupLinkForState = userProfile.onboardingStep === "needs_signup"
+                ? `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`
+                : "";
 
             // Matches [love], [like], etc.
             const reactionMatch = finalReplyText.match(/^\[(love|like|dislike|laugh|emphasize|question)\]/i);
@@ -1168,6 +1186,36 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                 console.log(`Replied: ${response?.guid}`);
             }
 
+            // Detect call booking intent from user's latest message
+            const userLatestMessage = (history[history.length - 1]?.content || "").toLowerCase();
+            const callBookingKeywords = /\b(call|book|appointment|schedule|let's talk|wanna talk|want to talk|ready to talk|lets call|call me)\b/i;
+            const wantsToCall = callBookingKeywords.test(userLatestMessage);
+
+            if (wantsToCall && userProfile.onboardingStep === "learning_more") {
+                console.log("User expressed interest in calling; initiating phone call...");
+                try {
+                    // Notify user that we're calling
+                    await sdk.messages.sendMessage({
+                        chatGuid: chat.guid,
+                        message: `perfect! i'm calling you now 📞`,
+                    });
+
+                    // Trigger the phone call (ElevenLabs or system call)
+                    console.log("Initiating Phone Call...");
+                    // TODO: Integrate with ElevenLabs call or native call system
+                    // For now, this is a placeholder
+                    await sdk.messages.sendMessage({
+                        chatGuid: chat.guid,
+                        message: `(call initiated — connecting you now)`,
+                    });
+
+                    // Transition to call state
+                    userProfile.onboardingStep = "on_call";
+                } catch (err: any) {
+                    console.error("Failed to initiate call:", err);
+                }
+            }
+
             // Send link as separate message if found
             if (linkToSend) {
                 try {
@@ -1179,6 +1227,18 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                     console.log(`Link sent: ${linkResponse?.guid}`);
                 } catch (err: any) {
                     console.error(`Failed to send link:`, err);
+                }
+            } else if (signupLinkForState) {
+                // Fallback: ensure signup link is sent even if LLM omitted the [LINK: ...] token
+                try {
+                    console.log(`Sending fallback signup link: ${signupLinkForState}`);
+                    const linkResponse = await sdk.messages.sendMessage({
+                        chatGuid: chat.guid,
+                        message: signupLinkForState,
+                    });
+                    console.log(`Fallback link sent: ${linkResponse?.guid}`);
+                } catch (err: any) {
+                    console.error(`Failed to send fallback link:`, err);
                 }
             }
 

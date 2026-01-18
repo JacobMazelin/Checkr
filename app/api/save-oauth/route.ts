@@ -35,7 +35,6 @@ export async function POST(req: NextRequest) {
       .insert({
         phone: phoneInt,
         oauthcode: oauthCode,
-        email: email,
       })
       .select()
 
