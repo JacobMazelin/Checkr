@@ -16,6 +16,10 @@
       "dest": "/api/auth/$1"
     },
     {
+      "src": "/api/save-oauth",
+      "dest": "/api/save-oauth"
+    },
+    {
       "src": "/api/(.*)",
       "dest": "/api"
     },
