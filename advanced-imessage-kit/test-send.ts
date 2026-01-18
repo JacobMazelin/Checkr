@@ -1,10 +1,15 @@
+import * as dotenv from "dotenv";
+import path from "path";
 import { SDK } from "./index";
 
-// Configuration from .env.local
+// Load environment variables
+dotenv.config({ path: path.join(__dirname, ".env.local") });
+
+// Configuration from environment variables
 const config = {
-    serverUrl: "https://e78yri.imsgd.photon.codes/",
-    apiKey: "AFSUsGhPPt72n5txn8e394k7",
-    recipient: "deep24ai@icloud.com"
+    serverUrl: process.env.SERVER_URL || "http://localhost:1234",
+    apiKey: process.env.PHOTON_API_KEY || process.env.API_KEY,
+    recipient: process.env.TEST_RECIPIENT_EMAIL || "test@example.com",
 };
 
 const sdk = SDK({

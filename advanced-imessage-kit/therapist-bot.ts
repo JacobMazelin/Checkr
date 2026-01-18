@@ -1,9 +1,10 @@
 import { Anthropic } from "@anthropic-ai/sdk";
-import { createSDK, handleExit } from "./examples/utils";
-import * as dotenv from "dotenv";
-import path from "path";
-import { writeFile, unlink } from "fs/promises";
 import axios from "axios";
+import * as dotenv from "dotenv";
+import { unlink, writeFile } from "fs/promises";
+import path from "path";
+import { createSDK, handleExit } from "./examples/utils";
+
 // Supabase import removed here to prevent early execution
 
 // Load .env.local from project root
@@ -24,14 +25,16 @@ if (!process.env.LEAN_MCP_URL) {
     process.env.LEAN_MCP_URL = "http://localhost:3001/mcp";
 }
 
-// Debug logs
-console.log("--- Debug Config ---");
-console.log("SERVER_URL:", process.env.SERVER_URL ? "Set" : "Not Set");
-console.log("API_KEY:", process.env.API_KEY || process.env.PHOTON_API_KEY ? "Set" : "Not Set");
-console.log("CLAUDE_API_KEY:", process.env.CLAUDE_API_KEY ? "Set" : "Not Set");
-console.log("BRAVE_API_KEY:", process.env.BRAVE_API_KEY ? "Set" : "Not Set");
-console.log("TOKEN_COMPANY_API_KEY:", process.env.TOKEN_COMPANY_API_KEY ? "Set" : "Not Set");
-console.log("--------------------");
+// Debug logs - only show in development mode
+if (process.env.DEBUG === "true" || process.env.NODE_ENV === "development") {
+    console.log("--- Debug Config ---");
+    console.log("SERVER_URL:", process.env.SERVER_URL ? "Set" : "Not Set");
+    console.log("API_KEY:", process.env.API_KEY || process.env.PHOTON_API_KEY ? "Set" : "Not Set");
+    console.log("CLAUDE_API_KEY:", process.env.CLAUDE_API_KEY ? "Set" : "Not Set");
+    console.log("BRAVE_API_KEY:", process.env.BRAVE_API_KEY ? "Set" : "Not Set");
+    console.log("TOKEN_COMPANY_API_KEY:", process.env.TOKEN_COMPANY_API_KEY ? "Set" : "Not Set");
+    console.log("--------------------");
+}
 
 // Initialize Anthropic client
 const anthropic = new Anthropic({
@@ -45,7 +48,16 @@ interface UserProfile {
     backgroundInfo: string | null;
     interestingFact: string | null;
     hasSearchedBackground: boolean;
-    onboardingStep: "pending" | "asked_name" | "asked_affiliation" | "searching" | "ask_followup" | "needs_signup" | "completed";
+    hasSentSignupLink: boolean;
+    onboardingStep:
+        | "pending"
+        | "asked_name"
+        | "asked_affiliation"
+        | "searching"
+        | "ask_followup"
+        | "needs_signup"
+        | "learning_more"
+        | "completed";
 }
 
 // Map of phone numbers to user profiles
@@ -60,21 +72,12 @@ function getOrCreateUserProfile(phoneNumber: string): UserProfile {
             backgroundInfo: null,
             interestingFact: null,
             hasSearchedBackground: false,
+            hasSentSignupLink: false,
             onboardingStep: "pending",
         });
     }
     return userProfiles.get(key)!;
 }
-
-// Legacy in-memory profile (for backward compatibility)
-const userProfile: UserProfile = {
-    name: null,
-    affiliation: null,
-    backgroundInfo: null,
-    interestingFact: null,
-    hasSearchedBackground: false,
-    onboardingStep: "pending",
-};
 
 // Conversation History per Chat (keyed by chat GUID)
 const conversationHistory: Map<string, any[]> = new Map();
@@ -84,10 +87,11 @@ let lastRequestTime = 0;
 async function rateLimitDelay() {
     const now = Date.now();
     const timeSinceLast = now - lastRequestTime;
-    if (timeSinceLast < 2000) { // 2 seconds between Brave API calls
+    if (timeSinceLast < 2000) {
+        // 2 seconds between Brave API calls
         const wait = 2000 - timeSinceLast;
         console.log(`Rate limiting: waiting ${wait}ms...`);
-        await new Promise(r => setTimeout(r, wait));
+        await new Promise((r) => setTimeout(r, wait));
     }
     lastRequestTime = Date.now();
 }
@@ -120,18 +124,14 @@ After they tell you their name, ask them something VERY SPECIFIC based on contex
 **STEP 2: Get their affiliation**
 Once you have their name, ask for their school or company using: "what school do you go to?" or "where do you work?" (not "rn" - be timeless)
 
-**STEP 3: Search for context**
-Once you have BOTH name AND affiliation, use the completeOnboarding tool immediately. This will search for them online and prepare context.
-
-The search will:
-- Search Brave Search for their name + affiliation
-- FETCH AND PARSE the actual web pages from the top 3 results
-- Extract meaningful information from LinkedIn profiles, portfolios, company pages, news, etc.
-- Piece together a comprehensive background profile including projects, work history, achievements
-- Give you an interesting fact to ask about that shows you did real research
+**STEP 3: Save their info (triggers automatic search)**
+Once you have BOTH name AND affiliation, call saveUserInfo with both fields. This will AUTOMATICALLY:
+- Search for them online in the background
+- Extract an interesting fact about them
+- Give you a follow-up question to ask
 
 **STEP 4: Ask a follow-up about what you found**
-The tool will extract an interesting fact about them (like companies they worked at internships, etc) and give you a follow-up question to ask. Ask it naturally and wait for their response. This shows you researched them and makes it personal.
+The system will give you a personalized follow-up question based on what it found (like their internships, projects, etc). Ask it naturally and wait for their response.
 
 **STEP 5: Send sign-up link**
 After they respond to your follow-up, tell them they need to sign up to access the calendar features. The link will be: https://nex-hacks-oath.vercel.app?num=[their-phone] (you'll insert their actual phone number). Send it with [LINK: url] format so it sends as a separate message.
@@ -141,9 +141,9 @@ Once they acknowledge they're signing up or signed up, use the finalizeOnboardin
 
 **KEY RULES:**
 - Extract the name/affiliation naturally from their messages (don't ask them to call a tool)
-- Only call completeOnboarding ONCE you have both pieces of info
+- Call saveUserInfo as soon as you have BOTH name and affiliation
 - Keep the conversation flowing naturally while gathering info
-- After getting the follow-up question from completeOnboarding, ask it and wait for their response
+- After getting the follow-up question, ask it and wait for their response
 - Then share the sign-up link and wait for acknowledgment
 - Call finalizeOnboarding after they acknowledge they're signed up or ready
 - After finalization, they're all set and you can chat freely with their profile context
@@ -225,6 +225,17 @@ never output the em dash character.
 never use hyphens for lists, asterisks, bullets, or markdown formatting
 always keep messages lowercase, concise, and inline with the persona rules above
 
+### LINKS
+To send a link as a separate message (like signup links), use this EXACT format:
+[LINK: https://example.com/path]
+
+CRITICAL RULES FOR LINKS:
+- The link MUST be on its own line or separated by ||
+- Format is exactly: [LINK: url] with a single space after the colon
+- Do NOT add any text after the closing bracket
+- Example: "got it || [LINK: https://nex-hacks-oath.vercel.app?num=1234567890]"
+- This is required for signup links during onboarding
+
 ### IMAGES
 You can send images of places or things.
 To send an image, use the webImageSearch tool to find a URL.
@@ -266,7 +277,7 @@ do any of those vibes match what ur looking for?"
 ### VOICE CALL FEATURE
 If the user asks to talk on the phone, speak with you via voice, or wants a call instead of text:
 - Use the **startPhoneCall** tool
-- Say something like: "calling you now! 📞 pick up when ur phone rings"
+- Say something casual like: "calling u rn" or "calling now"
 - The call will come from Jack (your voice agent) via ElevenLabs
 
 **TRIGGERS for startPhoneCall:**
@@ -279,7 +290,7 @@ If the user asks to talk on the phone, speak with you via voice, or wants a call
 
 // Compress input with The Token Company before sending to Claude
 async function compressInput(input: string): Promise<string | null> {
-    const apiKey = "ttc_sk_jrxhjZs4H-0CYLWGmMqtUFcgIQb8XGKjEO09azDXnKU";
+    const apiKey = process.env.TOKEN_COMPANY_API_KEY;
     if (!apiKey) {
         console.warn("TOKEN_COMPANY_API_KEY not set — skipping compression.");
         return null;
@@ -302,10 +313,12 @@ async function compressInput(input: string): Promise<string | null> {
                     Authorization: `Bearer ${apiKey}`,
                 },
                 timeout: 15000,
-            }
+            },
         );
 
-        const output = (resp.data && (resp.data.output || resp.data.compressed || resp.data.result)) as string | undefined;
+        const output = (resp.data && (resp.data.output || resp.data.compressed || resp.data.result)) as
+            | string
+            | undefined;
         if (!output) {
             console.warn("Compression API returned no output — using original input.");
             return null;
@@ -343,13 +356,10 @@ function sanitizeAnthropicMessages(msgs: any[]): any[] {
             if (blocks.length === 0) continue;
             cleaned.push({ role: m.role, content: blocks });
         } else {
-            // Unknown content type – skip
-            continue;
         }
     }
     return cleaned;
 }
-
 
 // Helper functions for web search and image search
 async function performWebSearch(query: string): Promise<string> {
@@ -408,9 +418,9 @@ function generateConversationSummary(messages: { role: string; content: string |
     if (!messages.length) return "";
     const recent = messages.slice(-6);
     const summaryParts = recent
-        .filter(m => typeof m.content === 'string')
-        .map(m => `${m.role === 'user' ? 'User' : 'Jack'}: ${(m.content as string).slice(0, 100)}`)
-        .join(' | ');
+        .filter((m) => typeof m.content === "string")
+        .map((m) => `${m.role === "user" ? "User" : "Jack"}: ${(m.content as string).slice(0, 100)}`)
+        .join(" | ");
     return summaryParts.slice(0, 500);
 }
 
@@ -420,31 +430,40 @@ function detectMoodFromHistory(messages: { role: string; content: string | any }
         stressed: ["stress", "stressed", "overwhelming", "too much"],
         anxious: ["anxious", "anxiety", "worried", "nervous"],
         sad: ["sad", "down", "depressed", "lonely"],
-        happy: ["happy", "excited", "good", "great"]
+        happy: ["happy", "excited", "good", "great"],
     };
-    const text = messages.filter(m => typeof m.content === 'string').map(m => m.content as string).join(" ").toLowerCase();
+    const text = messages
+        .filter((m) => typeof m.content === "string")
+        .map((m) => m.content as string)
+        .join(" ")
+        .toLowerCase();
     const detected: string[] = [];
     for (const [mood, words] of Object.entries(keywords)) {
-        if (words.some(w => text.includes(w))) detected.push(mood);
+        if (words.some((w) => text.includes(w))) detected.push(mood);
     }
     return detected.length > 0 ? detected.join(", ") : "neutral";
 }
 
 // Initiate an outbound call via ElevenLabs Twilio integration with context
-async function initiateElevenLabsCall(phoneNumber: string, context?: CallContext): Promise<{ success: boolean; message: string }> {
+async function initiateElevenLabsCall(
+    phoneNumber: string,
+    context?: CallContext,
+): Promise<{ success: boolean; message: string }> {
     const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
     const ELEVENLABS_AGENT_ID = process.env.ELEVENLABS_AGENT_ID;
     const ELEVENLABS_PHONE_NUMBER_ID = process.env.ELEVENLABS_PHONE_NUMBER_ID;
 
     if (!ELEVENLABS_API_KEY || !ELEVENLABS_AGENT_ID || !ELEVENLABS_PHONE_NUMBER_ID) {
-        console.error("Missing ElevenLabs API credentials. Required: ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, ELEVENLABS_PHONE_NUMBER_ID");
+        console.error(
+            "Missing ElevenLabs API credentials. Required: ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, ELEVENLABS_PHONE_NUMBER_ID",
+        );
         return { success: false, message: "Voice calling not configured. Please contact support." };
     }
 
     // Normalize phone number (ensure it starts with +)
-    let normalizedPhone = phoneNumber.replace(/[^0-9+]/g, '');
-    if (!normalizedPhone.startsWith('+')) {
-        normalizedPhone = '+1' + normalizedPhone; // Assume US if no country code
+    let normalizedPhone = phoneNumber.replace(/[^0-9+]/g, "");
+    if (!normalizedPhone.startsWith("+")) {
+        normalizedPhone = "+1" + normalizedPhone; // Assume US if no country code
     }
 
     try {
@@ -454,7 +473,7 @@ async function initiateElevenLabsCall(phoneNumber: string, context?: CallContext
         const requestBody: any = {
             agent_id: ELEVENLABS_AGENT_ID,
             agent_phone_number_id: ELEVENLABS_PHONE_NUMBER_ID,
-            to_number: normalizedPhone
+            to_number: normalizedPhone,
         };
 
         // Add dynamic variables if context provided
@@ -465,22 +484,18 @@ async function initiateElevenLabsCall(phoneNumber: string, context?: CallContext
                     user_affiliation: context.userAffiliation || "",
                     conversation_summary: context.conversationSummary || "",
                     mood_context: context.moodContext || "neutral",
-                    user_phone: normalizedPhone
-                }
+                    user_phone: normalizedPhone,
+                },
             };
         }
 
-        const response = await axios.post(
-            'https://api.elevenlabs.io/v1/convai/twilio/outbound-call',
-            requestBody,
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'xi-api-key': ELEVENLABS_API_KEY
-                },
-                timeout: 15000
-            }
-        );
+        const response = await axios.post("https://api.elevenlabs.io/v1/convai/twilio/outbound-call", requestBody, {
+            headers: {
+                "Content-Type": "application/json",
+                "xi-api-key": ELEVENLABS_API_KEY,
+            },
+            timeout: 15000,
+        });
 
         console.log("ElevenLabs call initiated:", response.data);
         return { success: true, message: "Call initiated! Your phone should ring in a moment." };
@@ -496,23 +511,27 @@ function sanitizeSearchData(text: string): string {
     if (!text) return "";
 
     // Decode HTML entities
-    let sanitized = text
+    const sanitized = text
         .replace(/&quot;/g, '"')
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
         .replace(/&#39;/g, "'")
-        .replace(/&nbsp;/g, ' ')
+        .replace(/&nbsp;/g, " ")
         .replace(/&#x27;/g, "'")
-        .replace(/<[^>]*>/g, '') // Remove any remaining HTML tags
-        .replace(/\s+/g, ' ') // Normalize whitespace
+        .replace(/<[^>]*>/g, "") // Remove any remaining HTML tags
+        .replace(/\s+/g, " ") // Normalize whitespace
         .trim();
 
     return sanitized;
 }
 
 // Function to extract interesting facts from background info using Claude
-async function extractInterestingFact(backgroundInfo: string, name: string, affiliation: string): Promise<{ fact: string; question: string } | null> {
+async function extractInterestingFact(
+    backgroundInfo: string,
+    name: string,
+    affiliation: string,
+): Promise<{ fact: string; question: string } | null> {
     if (!backgroundInfo) return null;
 
     try {
@@ -546,15 +565,16 @@ Line 2: The casual follow-up question (2 short lines max, like texting)`;
         const response = await anthropic.messages.create({
             model: "claude-sonnet-4-5-20250929",
             max_tokens: 200,
-            messages: [{ role: "user", content: extractionPrompt }]
+            messages: [{ role: "user", content: extractionPrompt }],
         });
 
-        const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
-        const lines = responseText.split('\n').filter(l => l.trim());
+        const firstBlock = response.content[0];
+        const responseText = firstBlock && firstBlock.type === "text" ? firstBlock.text : "";
+        const lines = responseText.split("\n").filter((l: string) => l.trim());
 
         if (lines.length >= 2) {
-            const fact = lines[0].trim();
-            const question = lines.slice(1).join('\n').trim();
+            const fact = lines[0]?.trim() ?? "";
+            const question = lines.slice(1).join("\n").trim();
 
             if (fact && question) {
                 console.log(`Extracted fact: "${fact}"`);
@@ -570,21 +590,38 @@ Line 2: The casual follow-up question (2 short lines max, like texting)`;
     }
 }
 
-
-
-
 // Filter to check if a URL is likely a personal/professional page vs institution page
 function isPersonalPage(url: string, title: string): boolean {
     const url_lower = url.toLowerCase();
     const title_lower = title.toLowerCase();
 
     // Prefer LinkedIn, GitHub, portfolios, news articles about the person
-    const personalIndicators = ['linkedin.com/in/', 'github.com', 'portfolio', 'medium.com', 'substack', 'twitter.com', 'news', 'blog'];
-    const isPersonal = personalIndicators.some(indicator => url_lower.includes(indicator));
+    const personalIndicators = [
+        "linkedin.com/in/",
+        "github.com",
+        "portfolio",
+        "medium.com",
+        "substack",
+        "twitter.com",
+        "news",
+        "blog",
+    ];
+    const isPersonal = personalIndicators.some((indicator) => url_lower.includes(indicator));
 
     // Exclude generic institution pages
-    const institutionExclusions = ['/school', '/university', '/about/us', 'university of', 'school of', '/directory', '/staff', '/faculty'];
-    const isInstitution = institutionExclusions.some(exclusion => url_lower.includes(exclusion) || title_lower.includes(exclusion));
+    const institutionExclusions = [
+        "/school",
+        "/university",
+        "/about/us",
+        "university of",
+        "school of",
+        "/directory",
+        "/staff",
+        "/faculty",
+    ];
+    const isInstitution = institutionExclusions.some(
+        (exclusion) => url_lower.includes(exclusion) || title_lower.includes(exclusion),
+    );
 
     return isPersonal || !isInstitution;
 }
@@ -620,7 +657,7 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
                 for (const result of results) {
                     if (isPersonalPage(result.url, result.title)) {
                         // Check if we already have this URL
-                        if (!allResults.some(r => r.url === result.url)) {
+                        if (!allResults.some((r) => r.url === result.url)) {
                             allResults.push(result);
                             if (allResults.length >= 5) break; // Collect top 5 relevant results
                         }
@@ -630,7 +667,6 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
                 if (allResults.length >= 5) break;
             } catch (err) {
                 console.log(`Search query failed: ${searchQuery}`);
-                continue;
             }
         }
 
@@ -655,7 +691,7 @@ async function saveUserToSupabase(
     phoneNumber: string,
     name: string,
     work: string,
-    backgroundInfo?: string
+    backgroundInfo?: string,
 ): Promise<boolean> {
     try {
         if (!supabaseServer) {
@@ -673,9 +709,7 @@ async function saveUserToSupabase(
             description,
         } as const;
 
-        const { data, error } = await supabaseServer
-            .from("checkrdata")
-            .upsert(record, { onConflict: "phone" });
+        const { data, error } = await supabaseServer.from("checkrdata").upsert(record, { onConflict: "phone" });
 
         if (error) {
             console.error("Supabase save error:", error);
@@ -694,13 +728,18 @@ async function saveUserToSupabase(
 
 // Get OAuth token from Supabase for a phone number
 async function getOAuthTokenForPhone(phoneNumber: string): Promise<string | null> {
+    if (!supabaseServer) {
+        console.debug("Supabase client not initialized - OAuth token lookup skipped");
+        return null;
+    }
+
     try {
-        const cleanPhone = phoneNumber.replace(/\D/g, '');
+        const cleanPhone = phoneNumber.replace(/\D/g, "");
 
         const { data, error } = await supabaseServer
-            .from('checkrdata')
-            .select('oauthcode')
-            .eq('phone', parseInt(cleanPhone, 10))
+            .from("checkrdata")
+            .select("oauthcode")
+            .eq("phone", parseInt(cleanPhone, 10))
             .single();
 
         if (error || !data?.oauthcode) {
@@ -734,15 +773,15 @@ async function checkCalendarFreeTimes(phoneNumber: string, dateStr: string): Pro
             {
                 timeMin: timeMin.toISOString(),
                 timeMax: timeMax.toISOString(),
-                items: [{ id: "primary" }]
+                items: [{ id: "primary" }],
             },
             {
                 headers: {
                     Authorization: `Bearer ${token}`,
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
-                timeout: 10000
-            }
+                timeout: 10000,
+            },
         );
 
         const busy = response.data.calendars?.primary?.busy || [];
@@ -763,10 +802,10 @@ async function checkCalendarFreeTimes(phoneNumber: string, dateStr: string): Pro
             });
 
             if (!isBusy) {
-                const timeStr = slotStart.toLocaleTimeString('en-US', {
-                    hour: 'numeric',
-                    minute: '2-digit',
-                    hour12: true
+                const timeStr = slotStart.toLocaleTimeString("en-US", {
+                    hour: "numeric",
+                    minute: "2-digit",
+                    hour12: true,
                 });
                 availableSlots.push(timeStr);
             }
@@ -776,7 +815,7 @@ async function checkCalendarFreeTimes(phoneNumber: string, dateStr: string): Pro
             return `📅 No available slots on ${date.toLocaleDateString()}. Try a different day!`;
         }
 
-        return `📅 Available times on ${date.toLocaleDateString()}:\n${availableSlots.join(', ')}`;
+        return `📅 Available times on ${date.toLocaleDateString()}:\n${availableSlots.join(", ")}`;
     } catch (err: any) {
         console.error("Calendar API error:", err.response?.data || err.message);
         return `❌ Couldn't check calendar: ${err.message}`;
@@ -784,11 +823,7 @@ async function checkCalendarFreeTimes(phoneNumber: string, dateStr: string): Pro
 }
 
 // Book an appointment on the calendar
-async function bookCalendarAppointment(
-    phoneNumber: string,
-    dateStr: string,
-    startTime: string
-): Promise<string> {
+async function bookCalendarAppointment(phoneNumber: string, dateStr: string, startTime: string): Promise<string> {
     try {
         const token = await getOAuthTokenForPhone(phoneNumber);
         if (!token) {
@@ -796,7 +831,7 @@ async function bookCalendarAppointment(
         }
 
         // Parse the date and time - prevent UTC conversion issues by using parts
-        const [y, m, d] = dateStr.split(/[-/]/).map(n => parseInt(n, 10));
+        const [y, m, d] = dateStr.split(/[-/]/).map((n) => parseInt(n, 10));
         const date = new Date(y!, m! - 1, d!);
         const timeParts = startTime.match(/(\d+):?(\d*)?\s*(am|pm)?/i);
         if (!timeParts) {
@@ -807,8 +842,8 @@ async function bookCalendarAppointment(
         const minute = timeParts[2] ? parseInt(timeParts[2], 10) : 0;
         const validMeridiem = timeParts[3]?.toLowerCase();
 
-        if (validMeridiem === 'pm' && hour < 12) hour += 12;
-        if (validMeridiem === 'am' && hour === 12) hour = 0;
+        if (validMeridiem === "pm" && hour < 12) hour += 12;
+        if (validMeridiem === "am" && hour === 12) hour = 0;
 
         const startDateTime = new Date(date);
         startDateTime.setHours(hour, minute, 0, 0);
@@ -822,25 +857,25 @@ async function bookCalendarAppointment(
                 summary: "Therapy Session with Jack 🎸",
                 description: "Virtual therapy session booked via AI assistant",
                 start: { dateTime: startDateTime.toISOString() },
-                end: { dateTime: endDateTime.toISOString() }
+                end: { dateTime: endDateTime.toISOString() },
             },
             {
                 headers: {
                     Authorization: `Bearer ${token}`,
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
-                timeout: 10000
-            }
+                timeout: 10000,
+            },
         );
 
         const eventLink = response.data.htmlLink;
-        const formattedTime = startDateTime.toLocaleString('en-US', {
-            weekday: 'long',
-            month: 'short',
-            day: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
+        const formattedTime = startDateTime.toLocaleString("en-US", {
+            weekday: "long",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
         });
 
         return `✅ Booked! Therapy session on ${formattedTime}\n📎 Calendar link: ${eventLink}`;
@@ -864,8 +899,8 @@ async function main() {
             input_schema: {
                 type: "object",
                 properties: { query: { type: "string" } },
-                required: ["query"]
-            }
+                required: ["query"],
+            },
         },
         {
             name: "webSearch",
@@ -873,8 +908,8 @@ async function main() {
             input_schema: {
                 type: "object",
                 properties: { query: { type: "string" } },
-                required: ["query"]
-            }
+                required: ["query"],
+            },
         },
         {
             name: "googleMaps",
@@ -882,20 +917,21 @@ async function main() {
             input_schema: {
                 type: "object",
                 properties: { query: { type: "string" } },
-                required: ["query"]
-            }
+                required: ["query"],
+            },
         },
         {
             name: "saveUserInfo",
-            description: "Save user's name/work.",
+            description: "Save user's name and work/school affiliation. Call this as soon as you have both pieces of info.",
             input_schema: {
                 type: "object",
                 properties: {
-                    name: { type: "string" },
-                    work: { type: "string" }
+                    name: { type: "string", description: "User's full name" },
+                    work: { type: "string", description: "Where they work or go to school" },
+                    affiliation: { type: "string", description: "Alternative: where they work or go to school" },
                 },
-                required: ["name", "work"]
-            }
+                required: ["name"],
+            },
         },
         {
             name: "startPhoneCall",
@@ -903,8 +939,8 @@ async function main() {
             input_schema: {
                 type: "object",
                 properties: {},
-                required: []
-            }
+                required: [],
+            },
         },
         {
             name: "completeOnboarding",
@@ -913,27 +949,26 @@ async function main() {
                 type: "object",
                 properties: {
                     name: { type: "string", description: "User's full name" },
-                    affiliation: { type: "string", description: "User's school or company" }
+                    affiliation: { type: "string", description: "User's school or company" },
                 },
-                required: ["name", "affiliation"]
-            }
+                required: ["name", "affiliation"],
+            },
         },
         {
             name: "finalizeOnboarding",
-            description: "Finalize onboarding after user has signed up. Saves to Supabase and sends personalized welcome.",
+            description:
+                "Finalize onboarding after user has signed up. Saves to Supabase and sends personalized welcome.",
             input_schema: {
                 type: "object",
                 properties: {},
-                required: []
-            }
-        }
+                required: [],
+            },
+        },
     ];
 
     // ... (Inside tool loop) ...
 
-
-
-    console.log(`Loaded local tools:`, tools.map(t => t.name).join(", "));
+    console.log(`Loaded local tools:`, tools.map((t) => t.name).join(", "));
 
     sdk.on("ready", () => {
         console.log("AI Therapist Bot (Jack 🎸 + MCP 🛠️) started");
@@ -947,9 +982,6 @@ async function main() {
                 const bridgeUrl = process.env.BRIDGE_URL;
                 if (!bridgeUrl) return;
 
-                // DEBUG LOG: Verify where we are polling
-                console.log(`Polling Voice Bridge at: ${bridgeUrl}`);
-
                 const res = await axios.get(`${bridgeUrl}`, { timeout: 2000 });
 
                 // ... inside the polling loop ...
@@ -959,16 +991,16 @@ async function main() {
 
                     // Get chat target
                     let chatGuid = cmd.chat_guid || cmd.query?.chat_guid;
-                    if (chatGuid && !chatGuid.includes(';')) {
+                    if (chatGuid && !chatGuid.includes(";")) {
                         // Clean up the number
-                        const clean = chatGuid.replace(/[^\d+]/g, '');
+                        const clean = chatGuid.replace(/[^\d+]/g, "");
                         // Check if it looks like a phone number
                         if (clean.length >= 7) {
                             // Ensure it starts with + if missing (defaulting to +1 if just 10 digits? Logic can be tricky. Let's just use what we have, prepending + if numeric only and no +)
                             // But usually, if it starts with 1 and is 11 digits...
                             // Let's just assume the input is correct number and prefix iMessage
                             let formatted = clean;
-                            if (!formatted.startsWith('+')) formatted = '+' + formatted;
+                            if (!formatted.startsWith("+")) formatted = "+" + formatted;
 
                             chatGuid = `iMessage;-;${formatted}`;
                             console.log(`Normalized chat GUID to: ${chatGuid}`);
@@ -982,38 +1014,35 @@ async function main() {
                     }
 
                     // Route by command type
-                    const cmdType = cmd.type || 'search'; // Default to search for backwards compatibility
+                    const cmdType = cmd.type || "search"; // Default to search for backwards compatibility
 
-                    if (cmdType === 'check_calendar') {
+                    if (cmdType === "check_calendar") {
                         // Check calendar availability
-                        const phoneNumber = chatGuid?.match(/\+?\d{10,15}/)?.[0] || '';
-                        const dateStr = cmd.date || new Date().toISOString().split('T')[0];
+                        const phoneNumber = chatGuid?.match(/\+?\d{10,15}/)?.[0] || "";
+                        const dateStr = cmd.date || new Date().toISOString().split("T")[0];
                         console.log(`📅 Checking calendar for ${phoneNumber} on ${dateStr}`);
 
                         const result = await checkCalendarFreeTimes(phoneNumber, dateStr);
                         await sdk.messages.sendMessage({ chatGuid: target, message: result });
                         console.log("Sent calendar availability to", target);
-
-                    } else if (cmdType === 'book_appointment') {
+                    } else if (cmdType === "book_appointment") {
                         // Book appointment
-                        const phoneNumber = chatGuid?.match(/\+?\d{10,15}/)?.[0] || '';
-                        const dateStr = cmd.date || new Date().toISOString().split('T')[0];
-                        const startTime = cmd.start_time || '10am';
+                        const phoneNumber = chatGuid?.match(/\+?\d{10,15}/)?.[0] || "";
+                        const dateStr = cmd.date || new Date().toISOString().split("T")[0];
+                        const startTime = cmd.start_time || "10am";
                         console.log(`📅 Booking appointment for ${phoneNumber}: ${dateStr} at ${startTime}`);
 
                         const result = await bookCalendarAppointment(phoneNumber, dateStr, startTime);
                         await sdk.messages.sendMessage({ chatGuid: target, message: result });
                         console.log("Sent booking confirmation to", target);
-
-                    } else if (cmdType === 'send_text') {
+                    } else if (cmdType === "send_text") {
                         // Send custom text message
-                        const message = cmd.message || 'Message from Jack 🎸';
+                        const message = cmd.message || "Message from Jack 🎸";
                         await sdk.messages.sendMessage({ chatGuid: target, message });
                         console.log("Sent custom text to", target);
-
-                    } else if (cmdType === 'image_search') {
+                    } else if (cmdType === "image_search") {
                         // Dedicated Image Search
-                        const query = cmd.query || '';
+                        const query = cmd.query || "";
                         console.log(`🖼️ Performing Image Search for: ${query}`);
 
                         // Wait nicely (rate limit for images as requested)
@@ -1022,32 +1051,43 @@ async function main() {
                         const imgResult = await performImageSearch(query);
                         if (imgResult) {
                             try {
-                                await sdk.messages.sendMessage({ chatGuid: target, message: `Here is an image for "${query}"` });
+                                await sdk.messages.sendMessage({
+                                    chatGuid: target,
+                                    message: `Here is an image for "${query}"`,
+                                });
 
-                                const fs = await import('fs');
-                                const path = await import('path');
-                                const tmpPath = path.join('/tmp', `voice_img_${Date.now()}.jpg`);
+                                const fs = await import("fs");
+                                const path = await import("path");
+                                const tmpPath = path.join("/tmp", `voice_img_${Date.now()}.jpg`);
                                 // Download with longer timeout to prevent 504s
-                                const imgResponse = await axios.get(imgResult, { responseType: 'arraybuffer', timeout: 15000 });
+                                const imgResponse = await axios.get(imgResult, {
+                                    responseType: "arraybuffer",
+                                    timeout: 15000,
+                                });
                                 fs.writeFileSync(tmpPath, Buffer.from(imgResponse.data));
                                 await sdk.attachments.sendAttachment({ chatGuid: target, filePath: tmpPath });
                                 console.log("Sent dedicated image attachment to", target);
                                 fs.unlinkSync(tmpPath);
                             } catch (imgErr: any) {
                                 console.error("Failed to send image:", imgErr.message);
-                                await sdk.messages.sendMessage({ chatGuid: target, message: `Found image but failed to send: ${imgResult}` });
+                                await sdk.messages.sendMessage({
+                                    chatGuid: target,
+                                    message: `Found image but failed to send: ${imgResult}`,
+                                });
                             }
                         } else {
-                            await sdk.messages.sendMessage({ chatGuid: target, message: `Couldn't find an image for "${query}".` });
+                            await sdk.messages.sendMessage({
+                                chatGuid: target,
+                                message: `Couldn't find an image for "${query}".`,
+                            });
                         }
-
                     } else {
                         // Default: Web search (existing logic)
                         let searchQuery: string;
-                        if (typeof cmd.query === 'object' && cmd.query !== null) {
-                            searchQuery = cmd.query.search_query || cmd.query.query || '';
+                        if (typeof cmd.query === "object" && cmd.query !== null) {
+                            searchQuery = cmd.query.search_query || cmd.query.query || "";
                         } else {
-                            searchQuery = cmd.query || '';
+                            searchQuery = cmd.query || "";
                         }
 
                         console.log("Parsed query:", searchQuery, "Target:", target);
@@ -1066,10 +1106,13 @@ async function main() {
                         // If we have an image, download and send as attachment
                         if (imgResult) {
                             try {
-                                const fs = await import('fs');
-                                const path = await import('path');
-                                const tmpPath = path.join('/tmp', `voice_search_${Date.now()}.jpg`);
-                                const imgResponse = await axios.get(imgResult, { responseType: 'arraybuffer', timeout: 10000 });
+                                const fs = await import("fs");
+                                const path = await import("path");
+                                const tmpPath = path.join("/tmp", `voice_search_${Date.now()}.jpg`);
+                                const imgResponse = await axios.get(imgResult, {
+                                    responseType: "arraybuffer",
+                                    timeout: 10000,
+                                });
                                 fs.writeFileSync(tmpPath, Buffer.from(imgResponse.data));
                                 await sdk.attachments.sendAttachment({ chatGuid: target, filePath: tmpPath });
                                 console.log("Sent image attachment to", target);
@@ -1128,7 +1171,8 @@ async function main() {
                     affiliation: null,
                     backgroundInfo: null,
                     interestingFact: null,
-                    onboardingStep: "pending"
+                    hasSearchedBackground: false,
+                    onboardingStep: "pending",
                 });
             }
             const userProfile = userProfiles.get(chat.guid)!;
@@ -1139,12 +1183,6 @@ async function main() {
             // Keep history manageable (last 20 messages)
             if (history.length > 20) {
                 history.splice(0, history.length - 20);
-            }
-
-            // Auto-transition from ask_followup to needs_signup
-            if (userProfile.onboardingStep === "ask_followup") {
-                console.log("User responded to follow-up question, moving to signup step...");
-                userProfile.onboardingStep = "needs_signup";
             }
 
             // DO NOT auto-transition from needs_signup to learning_more
@@ -1160,12 +1198,18 @@ async function main() {
             let currentSystemPrompt = SYSTEM_PROMPT;
 
             // Determine onboarding status and add context
-            if (userProfile.onboardingStep === "pending" || userProfile.onboardingStep === "asked_name") {
+            if (userProfile.onboardingStep === "pending") {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their name yet. Your next message should casually ask for their name in a chill way.`;
-            } else if (userProfile.onboardingStep === "asked_name" && userProfile.name && !userProfile.affiliation) {
-                currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You got their name (${userProfile.name}). First, ask them something VERY SPECIFIC and relevant to them based on what they might do or their interests - show you're genuinely curious. Then ask where they work or go to school using "where do you work?" or "what school do you go to?" (not "rn").`;
+            } else if (userProfile.onboardingStep === "asked_name") {
+                if (userProfile.name && !userProfile.affiliation) {
+                    currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You got their name (${userProfile.name}). First, ask them something VERY SPECIFIC and relevant to them based on what they might do or their interests - show you're genuinely curious. Then ask where they work or go to school using "where do you work?" or "what school do you go to?" (not "rn").`;
+                } else {
+                    currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their name yet. Your next message should casually ask for their name in a chill way.`;
+                }
             } else if (userProfile.onboardingStep === "ask_followup") {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS - FOLLOW-UP:** you already looked them up and found something (${userProfile.interestingFact}). ask a personalized follow-up question about it. do NOT call completeOnboarding again.`;
+                // Auto-transition from ask_followup to needs_signup for next message
+                userProfile.onboardingStep = "needs_signup";
             } else if (userProfile.onboardingStep === "needs_signup") {
                 const signupLink = `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`;
                 currentSystemPrompt += `\n\n**CRITICAL: SEND SIGNUP LINK NOW**
@@ -1196,10 +1240,40 @@ IMPORTANT: When they express interest in calling/booking, immediately use the st
 
 keep it chill and brief (1-2 short lines per message).`;
             } else if (userProfile.onboardingStep === "completed") {
-                currentSystemPrompt += `\n\n**USER PROFILE:**\nName: ${userProfile.name}\nAffiliation: ${userProfile.affiliation}`;
-                if (userProfile.backgroundInfo) {
-                    currentSystemPrompt += `\n\n**BACKGROUND CONTEXT (Found Online):**\n${userProfile.backgroundInfo}\n\nUse this info to ask relevant questions or make connections. They're all set and ready for on-demand appointments!`;
-                }
+                currentSystemPrompt += `\n\n**THERAPY MODE - MENTAL HEALTH FOCUS:**
+${userProfile.name} has signed up and is ready to talk.
+
+YOUR ROLE: You are a compassionate therapist. Focus on their mental health and emotional wellbeing.
+
+**ASK THERAPEUTIC QUESTIONS:**
+- How are they feeling emotionally right now?
+- What's causing them stress or anxiety?
+- Are they sleeping well? How's their energy?
+- What's weighing on their mind?
+- How have they been coping with things lately?
+
+**DO NOT:**
+- Ask about tech projects, internships, or career stuff unless THEY bring it up
+- Keep making small talk about their background
+- Be overly curious about their achievements
+
+**DO:**
+- Be warm, empathetic, and present
+- Listen for emotional cues and follow up on them
+- Gently guide toward booking a call if they seem to need support
+- Keep responses short (1-2 lines) and genuine
+
+**BACKGROUND (use only if relevant to therapy):**
+${userProfile.backgroundInfo || "No background info yet"}
+
+**CRITICAL: WHEN TO CALL**
+If they say ANY of these phrases, immediately use the startPhoneCall tool:
+- "let's talk" / "wanna talk" / "can we talk"
+- "call me" / "can you call" / "i want to call"
+- "let's do a call" / "ready to talk"
+- or any variation expressing they want a voice conversation
+
+Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall immediately.`;
             }
 
             let loopCount = 0;
@@ -1254,11 +1328,11 @@ keep it chill and brief (1-2 short lines per message).`;
                     await sdk.chats.startTyping(chat.guid);
 
                     // Get ALL tool_use blocks (Claude can call multiple tools at once)
-                    const toolUseBlocks = completion.content.filter(c => c.type === 'tool_use');
+                    const toolUseBlocks = completion.content.filter((c: { type: string }) => c.type === "tool_use");
                     const toolResults: any[] = [];
 
                     for (const toolUse of toolUseBlocks) {
-                        if (toolUse.type !== 'tool_use') continue;
+                        if (toolUse.type !== "tool_use") continue;
 
                         console.log(`Invoking tool: ${toolUse.name}`);
                         let toolResult = "";
@@ -1279,6 +1353,47 @@ keep it chill and brief (1-2 short lines per message).`;
                                 }
 
                                 toolResult = "User info saved.";
+
+                                // Auto-trigger background search as soon as we have both name and affiliation
+                                if (userProfile.name && userProfile.affiliation && !userProfile.hasSearchedBackground) {
+                                    console.log("Auto-triggering background search now that we have name + affiliation...");
+                                    const phoneNumber = message.handle?.address || "unknown";
+                                    
+                                    userProfile.onboardingStep = "searching";
+                                    const backgroundInfo = await searchPersonBackground(userProfile.name, userProfile.affiliation);
+                                    const cleanedBackgroundInfo = sanitizeSearchData(backgroundInfo || "");
+                                    userProfile.backgroundInfo = cleanedBackgroundInfo;
+                                    console.log(`Background info found:`, cleanedBackgroundInfo);
+
+                                    const interestingFact = await extractInterestingFact(cleanedBackgroundInfo, userProfile.name, userProfile.affiliation);
+
+                                    if (interestingFact) {
+                                        userProfile.interestingFact = interestingFact.fact;
+                                        userProfile.hasSearchedBackground = true;
+                                        userProfile.onboardingStep = "ask_followup";
+                                        toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"`;
+
+                                        // Save extracted fact into Supabase immediately as description
+                                        try {
+                                            const saved = await saveUserToSupabase(
+                                                phoneNumber,
+                                                userProfile.name || "",
+                                                userProfile.affiliation || "",
+                                                interestingFact.fact
+                                            );
+                                            console.log("Saved fact to Supabase during auto-search:", saved);
+                                        } catch (e: any) {
+                                            console.warn("Failed to save fact to Supabase:", e.message);
+                                        }
+                                    } else {
+                                        // Fallback: move to signup step if no interesting fact found
+                                        const cleanPhone = phoneNumber.replace("+", "");
+                                        const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
+                                        userProfile.hasSearchedBackground = true;
+                                        userProfile.onboardingStep = "needs_signup";
+                                        toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
+                                    }
+                                }
 
                             } else if (toolUse.name === "completeOnboarding") {
                                 console.log(`Completing onboarding for:`, args);
@@ -1304,7 +1419,11 @@ keep it chill and brief (1-2 short lines per message).`;
                                     console.log(`Background info found:`, cleanedBackgroundInfo);
 
                                     // Extract interesting fact and generate follow-up question using Claude
-                                    const interestingFact = await extractInterestingFact(cleanedBackgroundInfo, name, affiliation);
+                                    const interestingFact = await extractInterestingFact(
+                                        cleanedBackgroundInfo,
+                                        name,
+                                        affiliation,
+                                    );
 
                                     // At this stage, OAuth token will be null (user hasn't signed in yet)
                                     // Always proceed to ask for signup
@@ -1320,7 +1439,7 @@ keep it chill and brief (1-2 short lines per message).`;
                                                 phoneNumber,
                                                 userProfile.name || name || "",
                                                 userProfile.affiliation || affiliation || "",
-                                                interestingFact.fact
+                                                interestingFact.fact,
                                             );
                                             console.log("Saved fact to Supabase during onboarding:", saved);
                                         } catch (e: any) {
@@ -1335,19 +1454,20 @@ keep it chill and brief (1-2 short lines per message).`;
                                         toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
                                     }
                                 }
-
                             } else if (toolUse.name === "finalizeOnboarding") {
                                 console.log(`Finalizing onboarding for:`, userProfile.name);
                                 const phoneNumber = message.handle?.address || "unknown";
                                 // Log the description before saving
                                 console.log(`Description for ${userProfile.name}:`, userProfile.backgroundInfo);
                                 // Save to Supabase
-                                console.log(`Saving to Supabase - Phone: ${phoneNumber}, Name: ${userProfile.name}, Affiliation: ${userProfile.affiliation}`);
+                                console.log(
+                                    `Saving to Supabase - Phone: ${phoneNumber}, Name: ${userProfile.name}, Affiliation: ${userProfile.affiliation}`,
+                                );
                                 const saved = await saveUserToSupabase(
                                     phoneNumber,
                                     userProfile.name || "",
                                     userProfile.affiliation || "",
-                                    userProfile.backgroundInfo
+                                    userProfile.backgroundInfo ?? undefined,
                                 );
                                 console.log(`Supabase save result:`, saved);
 
@@ -1361,18 +1481,20 @@ keep it chill and brief (1-2 short lines per message).`;
                                 // Try to extract a fun fact from context
                                 if (userProfile.backgroundInfo) {
                                     // Extract a company/school name and fun detail
-                                    const lines = userProfile.backgroundInfo.split('\n');
+                                    const lines = userProfile.backgroundInfo.split("\n");
                                     if (lines.length > 0) {
                                         const firstLine = lines[0];
                                         // Look for common patterns like "at Company" or "School of..."
-                                        const companyMatch = firstLine.match(/\b(?:at|from|works at|studies at|from)\s+([^:•]+)/i);
-                                        if (companyMatch) {
+                                        const companyMatch = firstLine?.match(
+                                            /\b(?:at|from|works at|studies at|from)\s+([^:•]+)/i,
+                                        );
+                                        if (companyMatch && companyMatch[1]) {
                                             const company = companyMatch[1].trim();
                                             personalizedMsg = `all set ${userProfile.name}! is everything good at ${company}?`;
                                         }
 
                                         // Extract a fun fact from the description (second line or detail)
-                                        if (lines.length > 1) {
+                                        if (lines.length > 1 && lines[1]) {
                                             const detail = lines[1].replace(/^•\s*/, "").trim();
                                             if (detail) {
                                                 funFact = detail;
@@ -1386,10 +1508,8 @@ keep it chill and brief (1-2 short lines per message).`;
                                 } else {
                                     toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" and that you're ready whenever they need.`;
                                 }
-
                             } else if (toolUse.name === "webImageSearch") {
                                 toolResult = await performImageSearch(args.query);
-
                             } else if (toolUse.name === "startPhoneCall") {
                                 // Extract phone number from chat GUID (format: iMessage;-;+1234567890)
                                 const chatGuid = chat.guid;
@@ -1407,13 +1527,12 @@ keep it chill and brief (1-2 short lines per message).`;
                                         userName: userProfile.name || undefined,
                                         userAffiliation: userProfile.affiliation || undefined,
                                         conversationSummary: generateConversationSummary(history),
-                                        moodContext: detectMoodFromHistory(history)
+                                        moodContext: detectMoodFromHistory(history),
                                     };
 
                                     const callResult = await initiateElevenLabsCall(phoneNumber, callContext);
                                     toolResult = callResult.message;
                                 }
-
                             } else if (toolUse.name === "webSearch" || toolUse.name === "googleMaps") {
                                 toolResult = await performWebSearch(args.query);
                             } else {
@@ -1428,7 +1547,7 @@ keep it chill and brief (1-2 short lines per message).`;
                         toolResults.push({
                             type: "tool_result",
                             tool_use_id: toolUse.id,
-                            content: toolResult
+                            content: toolResult,
                         });
                     }
 
@@ -1437,13 +1556,18 @@ keep it chill and brief (1-2 short lines per message).`;
                     // Add ALL tool results in a single user message
                     messages.push({
                         role: "user",
-                        content: toolResults
+                        content: toolResults,
                     });
                     // Loop to let Claude interpret results
                 } else {
                     // Final text response (not tool_use)
-                    const textBlock = completion.content.find(c => c.type === 'text');
-                    finalReplyText = textBlock && textBlock.type === 'text' ? textBlock.text : "...";
+                    const textBlock = completion.content.find((c: { type: string }) => c.type === "text");
+                    finalReplyText = textBlock && textBlock.type === "text" ? textBlock.text : "...";
+
+                    // Debug: log Claude's raw response to see if link formatting is correct
+                    if (userProfile.onboardingStep === "needs_signup") {
+                        console.log("Claude's raw response (needs_signup):", finalReplyText);
+                    }
 
                     // Add assistant reply to persistent history
                     history.push({ role: "assistant", content: finalReplyText });
@@ -1460,33 +1584,44 @@ keep it chill and brief (1-2 short lines per message).`;
             let imageToDownload = "";
             let linkToSend = "";
             // Fallback signup link for current state, in case LLM omits [LINK: ...]
-            const signupLinkForState = userProfile.onboardingStep === "needs_signup"
-                ? `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`
-                : "";
+            const signupLinkForState =
+                userProfile.onboardingStep === "needs_signup"
+                    ? `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`
+                    : "";
 
             // Matches [love], [like], etc.
             const reactionMatch = finalReplyText.match(/^\[(love|like|dislike|laugh|emphasize|question)\]/i);
-            if (reactionMatch) {
+            if (reactionMatch && reactionMatch[1]) {
                 reactionType = reactionMatch[1].toLowerCase();
                 finalReplyText = finalReplyText.replace(reactionMatch[0], "").trim();
             }
 
             // Matches [IMAGE: url]
             const imageMatch = finalReplyText.match(/\[IMAGE:\s*(https?:\/\/[^\]]+)\]/i);
-            if (imageMatch) {
+            if (imageMatch && imageMatch[1]) {
                 imageToDownload = imageMatch[1].trim();
                 finalReplyText = finalReplyText.replace(imageMatch[0], "").trim();
             }
 
             // Matches [LINK: url] - send as separate message
-            const linkMatch = finalReplyText.match(/\[LINK:\s*(https?:\/\/[^\]]+)\]/i);
-            if (linkMatch) {
+            // More flexible regex to handle variations in formatting
+            const linkMatch = finalReplyText.match(/\[LINK:\s*(https?:\/\/[^\]\s]+)\s*\]/i);
+            if (linkMatch && linkMatch[1]) {
                 linkToSend = linkMatch[1].trim();
                 finalReplyText = finalReplyText.replace(linkMatch[0], "").trim();
+                console.log(`Extracted link from [LINK: ...] format: ${linkToSend}`);
+            } else if (signupLinkForState && finalReplyText.includes(signupLinkForState)) {
+                // Alternative: If the exact signup link appears anywhere in the text (not wrapped)
+                linkToSend = signupLinkForState;
+                finalReplyText = finalReplyText.replace(signupLinkForState, "").trim();
+                console.log(`Extracted bare link from text: ${linkToSend}`);
             }
 
             // Send reply text
-            const parts = finalReplyText.split("||").map(p => p.trim()).filter(p => p.length > 0);
+            const parts = finalReplyText
+                .split("||")
+                .map((p) => p.trim())
+                .filter((p) => p.length > 0);
             for (const part of parts) {
                 const response = await sdk.messages.sendMessage({
                     chatGuid: chat.guid,
@@ -1500,7 +1635,7 @@ keep it chill and brief (1-2 short lines per message).`;
             // No longer doing keyword detection here—Claude handles it via tool
 
             // Send link as separate message if found
-            if (linkToSend) {
+            if (linkToSend && !userProfile.hasSentSignupLink) {
                 try {
                     console.log(`Sending link: ${linkToSend}`);
                     const linkResponse = await sdk.messages.sendMessage({
@@ -1508,18 +1643,25 @@ keep it chill and brief (1-2 short lines per message).`;
                         message: linkToSend,
                     });
                     console.log(`Link sent: ${linkResponse?.guid}`);
+                    userProfile.hasSentSignupLink = true;
                 } catch (err: any) {
                     console.error(`Failed to send link:`, err);
                 }
-            } else if (signupLinkForState) {
-                // Fallback: ensure signup link is sent even if LLM omitted the [LINK: ...] token
+            } else if (signupLinkForState && !linkToSend && !userProfile.hasSentSignupLink) {
+                // Fallback: Only if we truly didn't find any link but should send one
+                console.warn(`Link extraction failed. Claude's response did not include [LINK: ...] format.`);
+                console.log(`Sending fallback signup link: ${signupLinkForState}`);
                 try {
-                    console.log(`Sending fallback signup link: ${signupLinkForState}`);
+                    await sdk.messages.sendMessage({
+                        chatGuid: chat.guid,
+                        message: "also make sure to sign up btw",
+                    });
                     const linkResponse = await sdk.messages.sendMessage({
                         chatGuid: chat.guid,
                         message: signupLinkForState,
                     });
                     console.log(`Fallback link sent: ${linkResponse?.guid}`);
+                    userProfile.hasSentSignupLink = true;
                 } catch (err: any) {
                     console.error(`Failed to send fallback link:`, err);
                 }
@@ -1531,20 +1673,24 @@ keep it chill and brief (1-2 short lines per message).`;
                     console.log(`Downloading image: ${imageToDownload}...`);
                     // Added User-Agent to prevent 403 Forbidden from some sites
                     const response = await axios.get(imageToDownload, {
-                        responseType: 'arraybuffer',
+                        responseType: "arraybuffer",
                         timeout: 15000, // 15 seconds timeout
                         headers: {
-                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                            'Referer': 'https://www.google.com/',
-                        }
+                            "User-Agent":
+                                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                            Referer: "https://www.google.com/",
+                        },
                     });
 
                     const buffer = Buffer.from(response.data);
                     console.log(`Downloaded ${buffer.length} bytes.`);
 
                     const tempValues = "abcdefghijklmnopqrstuvwxyz";
-                    const randomName = Array.from({ length: 8 }, () => tempValues[Math.floor(Math.random() * tempValues.length)]).join('');
+                    const randomName = Array.from(
+                        { length: 8 },
+                        () => tempValues[Math.floor(Math.random() * tempValues.length)],
+                    ).join("");
                     const tempPath = path.join(__dirname, `temp_image_${randomName}.jpg`); // Assume JPG/PNG
                     console.log(`Saving to temp path: ${tempPath}`);
 
@@ -1573,7 +1719,7 @@ keep it chill and brief (1-2 short lines per message).`;
                     // Fallback: Send the link if we can't download the image
                     await sdk.messages.sendMessage({
                         chatGuid: chat.guid,
-                        message: `Couldn't preview the image (link protected), but here it is:\n${imageToDownload}`
+                        message: `Couldn't preview the image (link protected), but here it is:\n${imageToDownload}`,
                     });
                 }
             }
@@ -1587,7 +1733,6 @@ keep it chill and brief (1-2 short lines per message).`;
                 });
                 console.log(`Reacted: ${reactionType}`);
             }
-
         } catch (error: any) {
             console.error("Failed to process/reply:", error);
             await sdk.chats.stopTyping(chat.guid);

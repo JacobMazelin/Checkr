@@ -1,11 +1,16 @@
+import * as dotenv from "dotenv";
+import path from "path";
 import { SDK } from "./index";
 
-// Configuration
+// Load environment variables
+dotenv.config({ path: path.join(__dirname, ".env.local") });
+
+// Configuration from environment variables
 const config = {
-    serverUrl: "https://e78yri.imsgd.photon.codes/",
-    apiKey: "AFSUsGhPPt72n5txn8e394k7",
+    serverUrl: process.env.SERVER_URL || "http://localhost:1234",
+    apiKey: process.env.PHOTON_API_KEY || process.env.API_KEY,
     // Format: +1 for US country code + 10 digit number
-    phoneNumber: "+12697792057"
+    phoneNumber: process.env.TEST_PHONE_NUMBER || "+10000000000",
 };
 
 const sdk = SDK({

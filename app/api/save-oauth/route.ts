@@ -23,10 +23,30 @@ export async function POST(req: NextRequest) {
       .single()
 
     if (existing) {
-      return NextResponse.json(
-        { success: true, alreadyExists: true },
-        { status: 200 }
-      )
+      // If OAuth code is already set, return already exists
+      if (existing.oauthcode) {
+        return NextResponse.json(
+          { success: true, alreadyExists: true },
+          { status: 200 }
+        )
+      }
+      
+      // Otherwise, update the existing row with the OAuth code
+      const { data: updated, error: updateError } = await supabaseServer
+        .from('checkrdata')
+        .update({ oauthcode: oauthCode })
+        .eq('phone', phoneInt)
+        .select()
+
+      if (updateError) {
+        console.error('Supabase update error:', updateError)
+        return NextResponse.json(
+          { error: 'Failed to update OAuth code' },
+          { status: 500 }
+        )
+      }
+
+      return NextResponse.json({ success: true, alreadyExists: false, data: updated }, { status: 200 })
     }
 
     // Insert into Supabase

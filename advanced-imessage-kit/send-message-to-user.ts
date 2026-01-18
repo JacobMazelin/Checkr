@@ -1,10 +1,15 @@
+import * as dotenv from "dotenv";
+import path from "path";
 import { SDK } from "./index";
 
-// Configuration from .env.local
+// Load environment variables
+dotenv.config({ path: path.join(__dirname, ".env.local") });
+
+// Configuration from environment variables
 const config = {
-    serverUrl: "https://e78yri.imsgd.photon.codes/",
-    apiKey: "AFSUsGhPPt72n5txn8e394k7",
-    recipient: "2697792057"
+    serverUrl: process.env.SERVER_URL || "http://localhost:1234",
+    apiKey: process.env.PHOTON_API_KEY || process.env.API_KEY,
+    recipient: process.env.TEST_RECIPIENT || "0000000000",
 };
 
 const sdk = SDK({
@@ -33,14 +38,13 @@ try {
 } catch (error) {
     console.error("Failed to send message:", error);
     try {
-         console.log("Retrying with iMessage...");
-         const message = await sdk.messages.sendMessage({
-            chatGuid: `iMessage;-;+1${config.recipient}`, 
+        console.log("Retrying with iMessage...");
+        const message = await sdk.messages.sendMessage({
+            chatGuid: `iMessage;-;+1${config.recipient}`,
             message: "Hello from Photon Advanced iMessage Kit! 🚀",
         });
         console.log("Message sent successfully!");
         console.log("GUID:", message.guid);
-
     } catch (retryError) {
         console.error("Failed to send message on retry:", retryError);
     }

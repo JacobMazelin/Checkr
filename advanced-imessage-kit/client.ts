@@ -390,8 +390,10 @@ export class AdvancedIMessageKit extends EventEmitter implements TypedEventEmitt
      */
     public enqueueSend<T>(task: () => Promise<T>): Promise<T> {
         const result = this.sendQueue.then(() => task());
-        // Update queue, swallow errors to not block subsequent sends
-        this.sendQueue = result.catch(() => {});
+        // Update queue, log errors but don't block subsequent sends
+        this.sendQueue = result.catch((err) => {
+            this.logger.warn(`Send queue task failed: ${err?.message || String(err)}`);
+        });
         return result;
     }
 }

@@ -1,8 +1,13 @@
+import * as dotenv from "dotenv";
+import path from "path";
 import { SDK } from "./index";
 
+// Load environment variables
+dotenv.config({ path: path.join(__dirname, ".env.local") });
+
 const sdk = SDK({
-    serverUrl: "https://e78yri.imsgd.photon.codes",
-    apiKey: "AFSUsGhPPt72n5txn8e394k7",
+    serverUrl: process.env.SERVER_URL || "http://localhost:1234",
+    apiKey: process.env.PHOTON_API_KEY || process.env.API_KEY,
 });
 
 console.log("Connecting to server...");

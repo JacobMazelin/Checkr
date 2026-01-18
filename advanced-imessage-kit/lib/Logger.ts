@@ -67,7 +67,10 @@ export class Logger extends EventEmitter {
         if (this.logFile) {
             try {
                 fs.appendFileSync(this.logFile, `${formatted}\n`);
-            } catch {}
+            } catch (err) {
+                // Silently fail file logging - console logging still works
+                // This can happen on read-only filesystems or permission issues
+            }
         }
 
         this.emit("log", { level, message, tag: this.tag });
