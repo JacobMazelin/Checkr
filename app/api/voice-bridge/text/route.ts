@@ -29,9 +29,11 @@ export async function POST(req: NextRequest) {
         const body = await req.json();
         console.log('💬 Text Webhook:', JSON.stringify(body, null, 2));
 
-        // Parse from ElevenLabs format
-        let message = body.message || body.arguments?.message;
-        let chatGuid = body.chat_guid || body.arguments?.chat_guid;
+        // Parse from ElevenLabs format (might be nested in send_text or arguments)
+        const params = body.send_text || body.arguments || body;
+
+        let message = params.message;
+        let chatGuid = params.chat_guid || params.chatGuid;
 
         if (!message) {
             console.error("❌ Missing 'message' in payload");

@@ -29,12 +29,14 @@ export async function POST(req: NextRequest) {
         const body = await req.json();
         console.log('📅 Calendar Webhook:', JSON.stringify(body, null, 2));
 
-        // Parse from ElevenLabs format (might be nested in arguments)
-        let action = body.action || body.arguments?.action;
-        let date = body.date || body.arguments?.date;
-        let startTime = body.start_time || body.arguments?.start_time;
-        let endTime = body.end_time || body.arguments?.end_time;
-        let chatGuid = body.chat_guid || body.arguments?.chat_guid;
+        // Parse from ElevenLabs format (might be nested in arguments or tool name object)
+        const params = body.book_appointment || body.check_calendar || body.arguments || body;
+
+        let action = params.action;
+        let date = params.date;
+        let startTime = params.start_time || params.startTime;
+        let endTime = params.end_time || params.endTime;
+        let chatGuid = params.chat_guid || params.chatGuid;
 
         // Determine command type
         let commandType: string;
