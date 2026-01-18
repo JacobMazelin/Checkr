@@ -37,7 +37,8 @@ interface UserProfile {
     name: string | null;
     affiliation: string | null;
     backgroundInfo: string | null;
-    onboardingStep: "pending" | "asked_name" | "asked_affiliation" | "searching" | "needs_signup" | "completed";
+    interestingFact: string | null;
+    onboardingStep: "pending" | "asked_name" | "asked_affiliation" | "searching" | "ask_followup" | "needs_signup" | "completed";
 }
 
 // Map of phone numbers to user profiles
@@ -50,6 +51,7 @@ function getOrCreateUserProfile(phoneNumber: string): UserProfile {
             name: null,
             affiliation: null,
             backgroundInfo: null,
+            interestingFact: null,
             onboardingStep: "pending",
         });
     }
@@ -61,6 +63,7 @@ const userProfile: UserProfile = {
     name: null,
     affiliation: null,
     backgroundInfo: null,
+    interestingFact: null,
     onboardingStep: "pending",
 };
 
@@ -104,17 +107,21 @@ Once you have their name, ask for their school or company using: "what school do
 **STEP 3: Search for context**
 Once you have BOTH name AND affiliation, use the completeOnboarding tool immediately. This will search for them online and prepare context.
 
-**STEP 4: Send sign-up link**
-The tool will automatically generate a sign-up link. Tell them they need to sign up to access the calendar features. The link will be provided in the tool result.
+**STEP 4: Ask a follow-up about what you found**
+The tool will extract an interesting fact about them (like companies they worked at internships, etc) and give you a follow-up question to ask. Ask it naturally and wait for their response. This shows you researched them and makes it personal.
 
-**STEP 5: Send personalized welcome**
-Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool. This will save them to the database and send a personalized welcome message about their role/company.
+**STEP 5: Send sign-up link**
+After they respond to your follow-up, tell them they need to sign up to access the calendar features. The link will be: https://nex-hacks-oath.vercel.app?num=[their-phone] (you'll insert their actual phone number). Send it with [LINK: url] format so it sends as a separate message.
+
+**STEP 6: Send personalized welcome**
+Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool. This will save them to the database and send a personalized welcome message.
 
 **KEY RULES:**
 - Extract the name/affiliation naturally from their messages (don't ask them to call a tool)
 - Only call completeOnboarding ONCE you have both pieces of info
 - Keep the conversation flowing naturally while gathering info
-- After getting the sign-up link from completeOnboarding, share it and wait for acknowledgment
+- After getting the follow-up question from completeOnboarding, ask it and wait for their response
+- Then share the sign-up link and wait for acknowledgment
 - Call finalizeOnboarding after they acknowledge they're signed up or ready
 - After finalization, they're all set and you can chat freely with their profile context
 
@@ -296,7 +303,77 @@ async function performImageSearch(query: string): Promise<string> {
     }
 }
 
-// Function to search for person and get background info
+// Function to sanitize and convert search data to plain text
+function sanitizeSearchData(text: string): string {
+    if (!text) return "";
+    
+    // Decode HTML entities
+    let sanitized = text
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&#39;/g, "'")
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&#x27;/g, "'")
+        .replace(/<[^>]*>/g, '') // Remove any remaining HTML tags
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .trim();
+    
+    return sanitized;
+}
+
+// Function to extract interesting facts from background info using Claude
+async function extractInterestingFact(backgroundInfo: string, name: string, affiliation: string): Promise<{ fact: string; question: string } | null> {
+    if (!backgroundInfo) return null;
+    
+    try {
+        // Sanitize the background info first
+        const cleanedInfo = sanitizeSearchData(backgroundInfo);
+        console.log("Cleaned background info:", cleanedInfo.substring(0, 200) + "...");
+        
+        const extractionPrompt = `You found this information about ${name} from ${affiliation}:
+
+${cleanedInfo}
+
+Extract ONE interesting fact about them that is DIFFERENT from what they already told you (their school/company). This could be:
+- Companies/startups they worked at
+- Achievements (internships, projects, hackathons)
+- Skills or interests
+- Notable accomplishments or credentials
+
+Then generate a short, casual follow-up question (1-2 short lines) that shows you researched them and are genuinely curious about that fact. The question should NOT be about their school (${affiliation}) or general work - it should be about the interesting thing you found.
+
+RESPOND WITH ONLY TWO LINES, NOTHING ELSE:
+Line 1: The interesting fact (brief, 2-5 words)
+Line 2: The casual follow-up question (2 short lines max, like texting)`;
+
+        const response = await anthropic.messages.create({
+            model: "claude-sonnet-4-5-20250929",
+            max_tokens: 150,
+            messages: [{ role: "user", content: extractionPrompt }]
+        });
+
+        const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
+        const lines = responseText.split('\n').filter(l => l.trim());
+        
+        if (lines.length >= 2) {
+            const fact = lines[0].trim();
+            const question = lines.slice(1).join('\n').trim();
+            
+            if (fact && question) {
+                return { fact, question };
+            }
+        }
+        
+        return null;
+    } catch (err: any) {
+        console.error("Failed to extract interesting fact:", err.message);
+        return null;
+    }
+}
+
+
 async function searchPersonBackground(name: string, affiliation: string): Promise<string> {
     try {
         const query = `${name} ${affiliation}`;
@@ -309,7 +386,7 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
             timeout: 10000,
         });
         
-        const results = response.data.web || [];
+        const results = response.data.web?.results || [];
         if (!results.length) return "";
         
         // Extract key info from first 3 results
@@ -521,7 +598,13 @@ async function main() {
 
             // Get or initialize user profile for this chat
             if (!userProfiles.has(chat.guid)) {
-                userProfiles.set(chat.guid, { name: null, work: null, backgroundInfo: null });
+                userProfiles.set(chat.guid, {
+                    name: null,
+                    affiliation: null,
+                    backgroundInfo: null,
+                    interestingFact: null,
+                    onboardingStep: "pending"
+                });
             }
             const userProfile = userProfiles.get(chat.guid)!;
 
@@ -531,6 +614,12 @@ async function main() {
             // Keep history manageable (last 20 messages)
             if (history.length > 20) {
                 history.splice(0, history.length - 20);
+            }
+
+            // Auto-transition from ask_followup to needs_signup
+            if (userProfile.onboardingStep === "ask_followup") {
+                console.log("User responded to follow-up question, moving to signup step...");
+                userProfile.onboardingStep = "needs_signup";
             }
 
             const messages: any[] = [...history];
@@ -547,9 +636,22 @@ async function main() {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their name yet. Your next message should casually ask for their name in a chill way.`;
             } else if (userProfile.onboardingStep === "asked_name" && userProfile.name && !userProfile.affiliation) {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You got their name (${userProfile.name}). First, ask them something VERY SPECIFIC and relevant to them based on what they might do or their interests - show you're genuinely curious. Then ask where they work or go to school using "where do you work?" or "what school do you go to?" (not "rn").`;
+            } else if (userProfile.onboardingStep === "ask_followup") {
+                currentSystemPrompt += `\n\n**ONBOARDING STATUS - FOLLOW-UP:** You searched for ${userProfile.name} at ${userProfile.affiliation} and found something cool about them (${userProfile.interestingFact}). Now ask them a personalized follow-up question about it to show you really did your research. Keep it casual and show genuine curiosity. Wait for their response before moving to the sign-up step.`;
             } else if (userProfile.onboardingStep === "needs_signup") {
                 const signupLink = `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`;
-                currentSystemPrompt += `\n\n**ONBOARDING STATUS - SIGN-UP NEEDED & FUN FACT:** They need to sign up to access calendar features. Now that you know their name (${userProfile.name}) and affiliation (${userProfile.affiliation}), throw in something fun or interesting about them to show you really know them. Then send the link: [LINK: ${signupLink}]. The || syntax will separate messages. Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool.`;
+                currentSystemPrompt += `\n\n**ONBOARDING STATUS - SEND SIGN-UP LINK NOW:**
+They just responded to your follow-up question. Now it's time to get them signed up for calendar access.
+
+Your NEXT message should:
+1. Acknowledge their response briefly (1 short line)
+2. Tell them "hey u gotta sign up to book appointments" 
+3. Send the link on its own line using this exact format: [LINK: ${signupLink}]
+
+Example format:
+"oh nice || hey u gotta sign up to book appointments || [LINK: ${signupLink}]"
+
+After they acknowledge signing up, use the finalizeOnboarding tool.`;
             } else if (userProfile.onboardingStep === "completed") {
                 currentSystemPrompt += `\n\n**USER PROFILE:**\nName: ${userProfile.name}\nAffiliation: ${userProfile.affiliation}`;
                 if (userProfile.backgroundInfo) {
@@ -626,19 +728,25 @@ async function main() {
                                 // Search for background context and fun facts
                                 console.log(`Searching for context: ${name} ${affiliation}`);
                                 const backgroundInfo = await searchPersonBackground(name, affiliation);
-                                userProfile.backgroundInfo = backgroundInfo || "";
-                                console.log(`Background info found:`, backgroundInfo);
+                                const cleanedBackgroundInfo = sanitizeSearchData(backgroundInfo || "");
+                                userProfile.backgroundInfo = cleanedBackgroundInfo;
+                                console.log(`Background info found:`, cleanedBackgroundInfo);
                                 
-                                // Generate sign-up link with their phone number
-                                const phoneNumber = message.handle?.address || "unknown";
-                                const cleanPhone = phoneNumber.replace("+", "");
-                                const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
+                                // Extract interesting fact and generate follow-up question using Claude
+                                const interestingFact = await extractInterestingFact(cleanedBackgroundInfo, name, affiliation);
                                 
-                                // Move to signup step
-                                userProfile.onboardingStep = "needs_signup";
-                                
-                                // Format with [LINK] so it gets sent separately
-                                toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
+                                if (interestingFact) {
+                                    userProfile.interestingFact = interestingFact.fact;
+                                    userProfile.onboardingStep = "ask_followup";
+                                    toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"`;
+                                } else {
+                                    // Fallback: move to signup step if no interesting fact found
+                                    const phoneNumber = message.handle?.address || "unknown";
+                                    const cleanPhone = phoneNumber.replace("+", "");
+                                    const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
+                                    userProfile.onboardingStep = "needs_signup";
+                                    toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
+                                }
 
                             } else if (toolUse.name === "finalizeOnboarding") {
                                 console.log(`Finalizing onboarding for:`, userProfile.name);
