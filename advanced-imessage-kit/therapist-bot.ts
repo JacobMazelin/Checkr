@@ -704,7 +704,7 @@ async function getOAuthTokenForPhone(phoneNumber: string): Promise<string | null
             .single();
 
         if (error || !data?.oauthcode) {
-            console.error("No OAuth token found for phone:", cleanPhone);
+            console.debug("No OAuth token found for phone (expected until user signs up):", cleanPhone);
             return null;
         }
 
@@ -1147,15 +1147,8 @@ async function main() {
                 userProfile.onboardingStep = "needs_signup";
             }
 
-            // Auto-transition from needs_signup to learning_more after user responds
-            if (userProfile.onboardingStep === "needs_signup" && history.length > 1) {
-                // Only transition if they've sent at least one message after the signup prompt
-                const recentMessages = history.slice(-2); // Last 2 messages
-                if (recentMessages.length >= 2 && recentMessages[recentMessages.length - 1].role === "user") {
-                    console.log("User acknowledged signup, moving to learning phase...");
-                    userProfile.onboardingStep = "learning_more";
-                }
-            }
+            // DO NOT auto-transition from needs_signup to learning_more
+            // Let Claude guide the flow via system prompt and finalizeOnboarding tool
 
             const messages: any[] = [...history];
             let isDone = false;
@@ -1175,18 +1168,19 @@ async function main() {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS - FOLLOW-UP:** you already looked them up and found something (${userProfile.interestingFact}). ask a personalized follow-up question about it. do NOT call completeOnboarding again.`;
             } else if (userProfile.onboardingStep === "needs_signup") {
                 const signupLink = `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`;
-                currentSystemPrompt += `\n\n**ONBOARDING STATUS - SEND SIGN-UP LINK NOW:**
-they replied — now guide them calmly to sign up for access
+                currentSystemPrompt += `\n\n**CRITICAL: SEND SIGNUP LINK NOW**
+they replied to your question. now ask them to sign up.
 
-your next message:
-1. acknowledge their reply briefly (1 short line)
-2. explain gently: "to book appointments you'll need to sign up"
-3. send the link on its own line using: [LINK: ${signupLink}]
+YOUR NEXT MESSAGE MUST INCLUDE:
+1. brief acknowledgment (1 line)
+2. explain: "to book appointments you need to sign up"
+3. THE LINK on its own line: [LINK: ${signupLink}]
 
-example:
-"got it || to book appointments you'll need to sign up || [LINK: ${signupLink}]"
+example: "got it || to book appointments you need to sign up || [LINK: ${signupLink}]"
 
-after they acknowledge, use the finalizeOnboarding tool.`;
+THE LINK MUST BE IN [LINK: ...] FORMAT OR I WILL SEND IT AS FALLBACK.
+
+after they respond, use finalizeOnboarding to move forward.`;
             } else if (userProfile.onboardingStep === "learning_more") {
                 currentSystemPrompt += `\n\n**LEARNING PHASE - ASK DISCOVERY QUESTIONS:**
 ${userProfile.name} just signed up! now learn more about what's going on with them.
@@ -1197,6 +1191,8 @@ ask 2-3 natural follow-up questions to understand their situation better:
 - what brought them here?
 
 be conversational and empathetic. show you care. if they express interest in talking to you or booking an appointment, note it — they might use words like "yeah let's talk", "i want to call", "let's do a call", "book me", "schedule", etc.
+
+IMPORTANT: When they express interest in calling/booking, immediately use the startPhoneCall tool to initiate the call. don't ask again, just call them.
 
 keep it chill and brief (1-2 short lines per message).`;
             } else if (userProfile.onboardingStep === "completed") {
@@ -1288,72 +1284,56 @@ keep it chill and brief (1-2 short lines per message).`;
                                 console.log(`Completing onboarding for:`, args);
                                 const name = args.name;
                                 const affiliation = args.affiliation;
+                                const phoneNumber = message.handle?.address || "unknown";
 
                                 // Prevent duplicate searches: only run once per user
                                 if (userProfile.hasSearchedBackground) {
                                     console.log("Skipping background search: already completed for this user.");
                                     toolResult = `already looked u up earlier, let's keep chatting`; // keep it casual
-                                    // Move to follow-up if not already there
-                                    if (userProfile.onboardingStep === "searching") {
-                                        userProfile.onboardingStep = "ask_followup";
-                                    }
-                                    // Do not break; ensure we still return a tool_result for this tool_use
-                                }
-
-                                // Update the user profile
-                                userProfile.name = name;
-                                userProfile.affiliation = affiliation;
-                                userProfile.onboardingStep = "searching";
-                                // Search for background context and fun facts (only once)
-                                console.log(`Searching for context: ${name} ${affiliation}`);
-                                const backgroundInfo = await searchPersonBackground(name, affiliation);
-                                const cleanedBackgroundInfo = sanitizeSearchData(backgroundInfo || "");
-                                userProfile.backgroundInfo = cleanedBackgroundInfo;
-                                console.log(`Background info found:`, cleanedBackgroundInfo);
-
-                                // Extract interesting fact and generate follow-up question using Claude
-                                const interestingFact = await extractInterestingFact(cleanedBackgroundInfo, name, affiliation);
-
-                                // Check for OAuth token
-                                // Check for OAuth token
-                                const oauthToken = await getOAuthTokenForPhone(phoneNumber);
-
-                                if (!oauthToken) {
-                                    const cleanPhone = phoneNumber.replace(/\D/g, '');
-                                    const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
-                                    userProfile.onboardingStep = "needs_signup";
-
-                                    // Use the fact if we have it, otherwise generic
-                                    const factMsg = interestingFact ? `I found this about you: "${interestingFact.fact}".` : "I've saved your info.";
-                                    toolResult = `${factMsg} But before we continue, ask the user to sign in to enable calendar features. Send this link clearly: [LINK: ${signupLink}]`;
-
-                                } else if (interestingFact) {
-                                    userProfile.interestingFact = interestingFact.fact;
-                                    userProfile.hasSearchedBackground = true;
-                                    userProfile.onboardingStep = "ask_followup";
-                                    toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"`;
-
-                                    // Save extracted fact into Supabase immediately as description
-                                    try {
-                                        const phoneNumber = message.handle?.address || "unknown";
-                                        const saved = await saveUserToSupabase(
-                                            phoneNumber,
-                                            userProfile.name || name || "",
-                                            userProfile.affiliation || affiliation || "",
-                                            interestingFact.fact
-                                        );
-                                        console.log("Saved fact to Supabase during onboarding:", saved);
-                                    } catch (e: any) {
-                                        console.warn("Failed to save fact to Supabase:", e.message);
-                                    }
+                                    // Continue to next tool, do not search again
                                 } else {
-                                    // Fallback: move to signup step if no interesting fact found
-                                    const phoneNumber = message.handle?.address || "unknown";
-                                    const cleanPhone = phoneNumber.replace("+", "");
-                                    const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
-                                    userProfile.hasSearchedBackground = true;
-                                    userProfile.onboardingStep = "needs_signup";
-                                    toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
+                                    // Update the user profile
+                                    userProfile.name = name;
+                                    userProfile.affiliation = affiliation;
+                                    userProfile.onboardingStep = "searching";
+                                    // Search for background context and fun facts (only once)
+                                    console.log(`Searching for context: ${name} ${affiliation}`);
+                                    const backgroundInfo = await searchPersonBackground(name, affiliation);
+                                    const cleanedBackgroundInfo = sanitizeSearchData(backgroundInfo || "");
+                                    userProfile.backgroundInfo = cleanedBackgroundInfo;
+                                    console.log(`Background info found:`, cleanedBackgroundInfo);
+
+                                    // Extract interesting fact and generate follow-up question using Claude
+                                    const interestingFact = await extractInterestingFact(cleanedBackgroundInfo, name, affiliation);
+
+                                    // At this stage, OAuth token will be null (user hasn't signed in yet)
+                                    // Always proceed to ask for signup
+                                    if (interestingFact) {
+                                        userProfile.interestingFact = interestingFact.fact;
+                                        userProfile.hasSearchedBackground = true;
+                                        userProfile.onboardingStep = "ask_followup";
+                                        toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"`;
+
+                                        // Save extracted fact into Supabase immediately as description
+                                        try {
+                                            const saved = await saveUserToSupabase(
+                                                phoneNumber,
+                                                userProfile.name || name || "",
+                                                userProfile.affiliation || affiliation || "",
+                                                interestingFact.fact
+                                            );
+                                            console.log("Saved fact to Supabase during onboarding:", saved);
+                                        } catch (e: any) {
+                                            console.warn("Failed to save fact to Supabase:", e.message);
+                                        }
+                                    } else {
+                                        // Fallback: move to signup step if no interesting fact found
+                                        const cleanPhone = phoneNumber.replace("+", "");
+                                        const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
+                                        userProfile.hasSearchedBackground = true;
+                                        userProfile.onboardingStep = "needs_signup";
+                                        toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
+                                    }
                                 }
 
                             } else if (toolUse.name === "finalizeOnboarding") {
@@ -1516,34 +1496,8 @@ keep it chill and brief (1-2 short lines per message).`;
             }
 
             // Detect call booking intent from user's latest message
-            const userLatestMessage = (history[history.length - 1]?.content || "").toLowerCase();
-            const callBookingKeywords = /\b(call|book|appointment|schedule|let's talk|wanna talk|want to talk|ready to talk|lets call|call me)\b/i;
-            const wantsToCall = callBookingKeywords.test(userLatestMessage);
-
-            if (wantsToCall && userProfile.onboardingStep === "learning_more") {
-                console.log("User expressed interest in calling; initiating phone call...");
-                try {
-                    // Notify user that we're calling
-                    await sdk.messages.sendMessage({
-                        chatGuid: chat.guid,
-                        message: `perfect! i'm calling you now 📞`,
-                    });
-
-                    // Trigger the phone call (ElevenLabs or system call)
-                    console.log("Initiating Phone Call...");
-                    // TODO: Integrate with ElevenLabs call or native call system
-                    // For now, this is a placeholder
-                    await sdk.messages.sendMessage({
-                        chatGuid: chat.guid,
-                        message: `(call initiated — connecting you now)`,
-                    });
-
-                    // Transition to call state
-                    userProfile.onboardingStep = "on_call";
-                } catch (err: any) {
-                    console.error("Failed to initiate call:", err);
-                }
-            }
+            // (Claude will use startPhoneCall tool when user expresses interest)
+            // No longer doing keyword detection here—Claude handles it via tool
 
             // Send link as separate message if found
             if (linkToSend) {
