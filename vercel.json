@@ -20,6 +20,10 @@
       "dest": "/api/save-oauth"
     },
     {
+      "src": "/api/voice-bridge",
+      "dest": "/api/voice-bridge"
+    },
+    {
       "src": "/api/(.*)",
       "dest": "/api"
     },
