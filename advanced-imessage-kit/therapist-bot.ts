@@ -848,8 +848,9 @@ async function bookCalendarAppointment(
             return "❌ You need to sign up first to use calendar features.";
         }
 
-        // Parse the date and time
-        const date = new Date(dateStr);
+        // Parse the date and time - prevent UTC conversion issues by using parts
+        const [y, m, d] = dateStr.split(/[-/]/).map(n => parseInt(n, 10));
+        const date = new Date(y!, m! - 1, d!);
         const timeParts = startTime.match(/(\d+):?(\d*)?\s*(am|pm)?/i);
         if (!timeParts) {
             return "❌ Couldn't understand that time format. Try something like '2pm' or '14:00'.";
