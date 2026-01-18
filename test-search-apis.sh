@@ -5,7 +5,7 @@ echo "Testing Search API Endpoints"
 echo "======================================"
 echo ""
 
-BASE_URL="http://localhost:3000"
+BASE_URL="localhost:3000"
 PHONE="16304864819"
 
 # Test 1: Image Search
