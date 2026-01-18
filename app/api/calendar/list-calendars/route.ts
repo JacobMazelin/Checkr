@@ -24,14 +24,16 @@ export async function POST(req: NextRequest) {
 
         if (!phone_number) {
             return NextResponse.json(
-                { error: 'Missing phone_number parameter' },
+                { error: 'Missing required parameter: phone_number' },
                 { status: 400 }
             );
         }
 
         const token = await getOAuthToken(phone_number);
         
-        // Try to list calendars
+        console.log(`[List Calendars] Fetching calendars for ${phone_number}`);
+
+        // List all calendars the user has access to
         const response = await axios.get(
             "https://www.googleapis.com/calendar/v3/users/me/calendarList",
             {
@@ -42,20 +44,25 @@ export async function POST(req: NextRequest) {
             }
         );
 
+        console.log(`[List Calendars] Found ${response.data.items?.length || 0} calendars`);
+
         return NextResponse.json({
             success: true,
             calendars: response.data.items?.map((cal: any) => ({
                 id: cal.id,
                 summary: cal.summary,
-                primary: cal.primary,
+                primary: cal.primary || false,
                 accessRole: cal.accessRole
             }))
         });
 
     } catch (error: any) {
-        console.error("Calendar API error:", error.response?.data || error.message);
+        console.error("Calendar list error:", error.response?.data || error.message);
         return NextResponse.json(
-            { error: error.response?.data || error.message || 'Failed to list calendars' },
+            { 
+                error: error.response?.data?.error?.message || error.message || 'Failed to list calendars',
+                details: error.response?.data 
+            },
             { status: 500 }
         );
     }

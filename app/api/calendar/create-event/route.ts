@@ -57,16 +57,17 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        console.log(`[Create Event] Phone: ${phone_number}, Date: ${date}, Time: ${time}`);
-        
         const token = await getOAuthToken(phone_number);
-        console.log(`[Create Event] OAuth token retrieved: ${token.substring(0, 20)}...`);
+        
+        console.log(`[Create Event] Creating event for ${phone_number}`);
+        console.log(`[Create Event] Date: ${date}, Time: ${time}`);
         
         const startTime = parseDateTime(date, time);
-        console.log(`[Create Event] Parsed start time: ${startTime.toISOString()}`);
-        
         const endTime = new Date(startTime);
         endTime.setHours(startTime.getHours() + 1);
+
+        console.log(`[Create Event] Start: ${startTime.toISOString()}`);
+        console.log(`[Create Event] End: ${endTime.toISOString()}`);
 
         const event = {
             summary: "Therapy Session",
@@ -104,10 +105,15 @@ export async function POST(req: NextRequest) {
         });
 
     } catch (error: any) {
-        console.error("[Create Event] Error:", error.response?.data || error.message);
-        console.error("[Create Event] Full error:", error);
+        console.error("Calendar API error:", error.response?.data || error.message);
+        console.error("Full error:", JSON.stringify(error.response?.data, null, 2));
+        console.error("Status code:", error.response?.status);
+        
         return NextResponse.json(
-            { error: error.response?.data?.error?.message || error.message || 'Failed to create event' },
+            { 
+                error: error.response?.data?.error?.message || error.message || 'Failed to create event',
+                details: error.response?.data 
+            },
             { status: 500 }
         );
     }

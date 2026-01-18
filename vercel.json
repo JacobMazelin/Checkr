@@ -36,6 +36,10 @@
       "dest": "/api/calendar/send-confirmation"
     },
     {
+      "src": "/api/calendar/list-calendars",
+      "dest": "/api/calendar/list-calendars"
+    },
+    {
       "src": "/api/search/image",
       "dest": "/api/search/image"
     },
