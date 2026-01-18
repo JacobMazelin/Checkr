@@ -149,7 +149,7 @@ After they respond to your follow-up, tell them they need to sign up to access b
 **STEP 6: Send personalized welcome**
 Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool. This will save them to the database and send a personalized welcome message.
 
-**CRITICAL:** When a user says "sign up" or similar, IMMEDIATELY send them the signup link. Don't ask "when" - they want to sign up NOW.
+**CRITICAL:** When a user says book a call or similar, IMMEDIATELY send them a call. Don't ask "when" - they want to call NOW.
 
 **KEY RULES:**
 - Extract the name/affiliation naturally from their messages (don't ask them to call a tool)
@@ -1601,6 +1601,18 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                 }
             }
 
+            // CRITICAL: Filter out signup links from history to prevent duplicate sends
+            if (userProfile.hasSentSignupLink) {
+                const signupLinkPattern = /https:\/\/nex-hacks-oath\.vercel\.app\?num=/;
+                history = history.filter((msg: any) => {
+                    if (typeof msg.content === 'string') {
+                        return !signupLinkPattern.test(msg.content);
+                    }
+                    return true;
+                });
+                conversationHistory.set(chat.guid, history);
+            }
+
             // Stop typing indicator
             await sdk.chats.stopTyping(chat.guid);
 
@@ -1669,6 +1681,16 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                     });
                     console.log(`Link sent: ${linkResponse?.guid}`);
                     userProfile.hasSentSignupLink = true;
+                    
+                    // Immediately filter this link from history
+                    const signupLinkPattern = /https:\/\/nex-hacks-oath\.vercel\.app\?num=/;
+                    history = history.filter((msg: any) => {
+                        if (typeof msg.content === 'string') {
+                            return !signupLinkPattern.test(msg.content);
+                        }
+                        return true;
+                    });
+                    conversationHistory.set(chat.guid, history);
                 } catch (err: any) {
                     console.error(`Failed to send link:`, err);
                 }
