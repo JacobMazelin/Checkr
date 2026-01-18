@@ -4,14 +4,20 @@ import * as dotenv from "dotenv";
 import path from "path";
 import { writeFile, unlink } from "fs/promises";
 import axios from "axios";
-import { supabaseServer } from "../lib/supabase";
+// Supabase import removed here to prevent early execution
 
 // Load .env.local from project root
 dotenv.config({ path: path.join(__dirname, "../.env.local") });
 
-
-// Load .env.local from project root
-dotenv.config({ path: path.join(__dirname, "../.env.local") });
+// Now import Supabase dynamically (or use require)
+// Note: We'll initialize it lazily or use a global var
+let supabaseServer: any;
+try {
+    const supabaseModule = require("../lib/supabase");
+    supabaseServer = supabaseModule.supabaseServer;
+} catch (e) {
+    console.warn("Could not load Supabase client (likely due to missing env vars in build):", e);
+}
 
 // Helper to ensure URL is set for local dev if missing
 if (!process.env.LEAN_MCP_URL) {
@@ -82,6 +88,9 @@ async function rateLimitDelay() {
     }
     lastRequestTime = Date.now();
 }
+
+// Global fallback for voice commands
+let lastActiveChatGuid: string | null = null;
 
 const SYSTEM_PROMPT = `You are Jack, an AI therapist. Genuinely curious about people, warm, and progressively more flirty as you get to know someone. Long black hair, relaxed California vibe, low-energy but deeply engaged when someone interests you.
 
@@ -270,10 +279,10 @@ async function performWebSearch(query: string): Promise<string> {
             headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
             timeout: 10000,
         });
-        
+
         const results = response.data.web || [];
         if (!results.length) return "No results found.";
-        
+
         return results
             .slice(0, 3)
             .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.url}\n${r.description || ""}`)
@@ -292,10 +301,10 @@ async function performImageSearch(query: string): Promise<string> {
             headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
             timeout: 10000,
         });
-        
+
         const images = response.data.images || [];
         if (!images.length) return "";
-        
+
         return images[0].url || "";
     } catch (err: any) {
         console.error("Image search failed:", err.message);
@@ -378,7 +387,7 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
     try {
         const query = `${name} ${affiliation}`;
         console.log(`Searching background for: ${query}`);
-        
+
         await rateLimitDelay();
         const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
             params: { q: query, count: 5 },
@@ -388,13 +397,13 @@ async function searchPersonBackground(name: string, affiliation: string): Promis
         
         const results = response.data.web?.results || [];
         if (!results.length) return "";
-        
+
         // Extract key info from first 3 results
         const backgroundLines = results
             .slice(0, 3)
             .map((r: any) => `• ${r.title}: ${r.description || ""}`)
             .join("\n");
-        
+
         return backgroundLines;
     } catch (err: any) {
         console.error("Background search failed:", err.message);
@@ -411,7 +420,7 @@ async function saveUserToSupabase(
 ): Promise<boolean> {
     try {
         const cleanPhone = phoneNumber.replace("+", "");
-        
+
         const { data, error } = await supabaseServer
             .from("checkrdata")
             .upsert(
@@ -421,12 +430,12 @@ async function saveUserToSupabase(
                 },
                 { onConflict: "phone_number" }
             );
-        
+
         if (error) {
             console.error("Supabase save error:", error);
             return false;
         }
-        
+
         console.log("User saved to Supabase:", cleanPhone);
         return true;
     } catch (err: any) {
@@ -532,7 +541,12 @@ async function main() {
                 const bridgeUrl = process.env.BRIDGE_URL;
                 if (!bridgeUrl) return;
 
+                // DEBUG LOG: Verify where we are polling
+                console.log(`Polling Voice Bridge at: ${bridgeUrl}`);
+
                 const res = await axios.get(`${bridgeUrl}`, { timeout: 2000 });
+
+                // ... inside the polling loop ...
                 if (res.data?.command) {
                     const cmd = res.data.command;
                     console.log("Voice Command Received:", cmd);
@@ -543,45 +557,66 @@ async function main() {
                         performImageSearch(cmd.query)
                     ]);
 
-                    const finalMsg = `I found some info for "${cmd.query}":\n\n${webResult}\n\n[IMAGE: ${imgResult}]`;
-
-                    // Send to Chat
-                    // Fallback to last active chat if no GUID provided
-                    let targetGuid = cmd.chat_guid;
-                    if (!targetGuid && conversationHistory.size > 0) {
-                        targetGuid = [...conversationHistory.keys()].pop();
+                    let finalMsg = `I found some info for "${cmd.query}":\n\n${webResult}`;
+                    if (imgResult) {
+                        finalMsg += `\n\n[IMAGE: ${imgResult}]`;
                     }
 
-                    if (targetGuid) {
-                        // Split and send
-                        const parts = finalMsg.split("||"); // Basic split if needed, or just send
-                        await sdk.messages.sendMessage({
-                            chatGuid: targetGuid,
-                            message: finalMsg // SDK handles basic length? If not, simple send.
-                        });
-                        console.log("Sent Voice Command response to", targetGuid);
+                    // Log to console so user sees it even if send fails
+                    console.log("✅ GENERATED RESULT:\n", finalMsg);
+
+                    // Determine target: Explicit > Fallback
+                    const primaryTarget = cmd.chat_guid;
+                    const fallbackTarget = lastActiveChatGuid;
+
+                    // Try sending
+                    const target = primaryTarget || fallbackTarget;
+
+                    if (target) {
+                        try {
+                            // Split and send
+                            const parts = finalMsg.split("||");
+                            await sdk.messages.sendMessage({
+                                chatGuid: target,
+                                message: finalMsg
+                            });
+                            console.log("Sent Voice Command response to", target);
+                        } catch (sendErr) {
+                            console.error(`Failed to send to ${target}:`, sendErr);
+
+                            // If we tried primary and failed, and have a DIFFERENT fallback, try that
+                            if (primaryTarget && fallbackTarget && primaryTarget !== fallbackTarget) {
+                                console.log(`🔄 Retrying with fallback: ${fallbackTarget}`);
+                                try {
+                                    await sdk.messages.sendMessage({
+                                        chatGuid: fallbackTarget,
+                                        message: finalMsg
+                                    });
+                                    console.log("Sent to fallback successfully.");
+                                } catch (fallbackErr) {
+                                    console.error("Fallback failed too.");
+                                }
+                            }
+                        }
                     } else {
-                        console.warn("No active chat to send voice response to.");
+                        console.warn("⚠️ No active chat found to send response. Text the bot first!");
                     }
                 }
-            } catch (e) {
-                // console.error("Polling error:", e.message); // suppress spam
+            } catch (e: any) {
+                console.error("Polling error:", e.message);
             }
         }, 2000);
     });
 
     sdk.on("new-message", async (message) => {
         const userText = message.text || message.attributedBody?.[0]?.string || "";
-        console.log(`\nReceived: ${userText || "(no text)"}`);
-        console.log(`From: ${message.handle?.address || "unknown"} (isFromMe: ${message.isFromMe})`);
-
-        // Skip messages from self (unless testing with /therapist prefix)
-        const isTestMessage = message.isFromMe && userText.toLowerCase().startsWith("/therapist");
-        if (message.isFromMe && !isTestMessage) {
-            return;
-        }
+        // ... (logging)
 
         const chat = message.chats?.[0];
+        if (chat) {
+            // Update last active chat
+            lastActiveChatGuid = chat.guid;
+        }
         if (!chat) return;
 
         if (!userText) return;
@@ -705,26 +740,25 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                 console.log(`Saving user info:`, args);
                                 userProfile.name = args.name;
                                 userProfile.affiliation = args.affiliation || args.work;
-                                
+
                                 // Track onboarding progression
                                 if (!userProfile.name) {
                                     userProfile.onboardingStep = "asked_name";
                                 } else if (!userProfile.affiliation) {
                                     userProfile.onboardingStep = "asked_affiliation";
                                 }
-                                
+
                                 toolResult = "User info saved.";
 
                             } else if (toolUse.name === "completeOnboarding") {
                                 console.log(`Completing onboarding for:`, args);
                                 const name = args.name;
                                 const affiliation = args.affiliation;
-                                
+
                                 // Update the user profile
                                 userProfile.name = name;
                                 userProfile.affiliation = affiliation;
                                 userProfile.onboardingStep = "searching";
-                                
                                 // Search for background context and fun facts
                                 console.log(`Searching for context: ${name} ${affiliation}`);
                                 const backgroundInfo = await searchPersonBackground(name, affiliation);
@@ -751,10 +785,8 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                             } else if (toolUse.name === "finalizeOnboarding") {
                                 console.log(`Finalizing onboarding for:`, userProfile.name);
                                 const phoneNumber = message.handle?.address || "unknown";
-                                
                                 // Log the description before saving
                                 console.log(`Description for ${userProfile.name}:`, userProfile.backgroundInfo);
-                                
                                 // Save to Supabase
                                 console.log(`Saving to Supabase - Phone: ${phoneNumber}, Name: ${userProfile.name}, Affiliation: ${userProfile.affiliation}`);
                                 const saved = await saveUserToSupabase(
@@ -764,14 +796,14 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                     userProfile.backgroundInfo
                                 );
                                 console.log(`Supabase save result:`, saved);
-                                
+
                                 // Mark as completed
                                 userProfile.onboardingStep = "completed";
-                                
+
                                 // Generate personalized message based on context with fun fact
                                 let personalizedMsg = `all set ${userProfile.name}! im ready on-demand whenever u need to chat`;
                                 let funFact = "";
-                                
+
                                 // Try to extract a fun fact from context
                                 if (userProfile.backgroundInfo) {
                                     // Extract a company/school name and fun detail
@@ -784,7 +816,7 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                             const company = companyMatch[1].trim();
                                             personalizedMsg = `all set ${userProfile.name}! is everything good at ${company}?`;
                                         }
-                                        
+
                                         // Extract a fun fact from the description (second line or detail)
                                         if (lines.length > 1) {
                                             const detail = lines[1].replace(/^•\s*/, "").trim();
@@ -794,7 +826,7 @@ After they acknowledge signing up, use the finalizeOnboarding tool.`;
                                         }
                                     }
                                 }
-                                
+
                                 if (funFact) {
                                     toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" then throw in a fun fact based on what you learned: "${funFact}". Let them know you're ready whenever they need.`;
                                 } else {

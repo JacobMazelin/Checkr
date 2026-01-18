@@ -38,3 +38,6 @@ npm-debug.log*
 
 # Old frontend directory (keep for reference or delete manually)
 frontend/
+
+# Local DB
+voice_queue.json
