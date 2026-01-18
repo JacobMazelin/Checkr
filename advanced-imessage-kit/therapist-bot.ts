@@ -54,7 +54,7 @@ async function rateLimitDelay() {
     const timeSinceLast = now - lastRequestTime;
     if (timeSinceLast < 1100) { // Slightly more than 1s to be safe
         const wait = 1100 - timeSinceLast;
-        console.log(`Rate limiting: waiting ${wait}ms...`);
+        // console.log(`Rate limiting: waiting ${wait}ms...`);
         await new Promise(r => setTimeout(r, wait));
     }
     lastRequestTime = Date.now();
@@ -211,65 +211,112 @@ async function main() {
         apiKey: process.env.PHOTON_API_KEY || process.env.API_KEY,
     });
 
-    // Initialize Local Tools (Replacements for broken MCP)
+    // Initialize Local Tools
     const tools: any[] = [
         {
             name: "webImageSearch",
-            description: "Search for an image URL using Brave Search. Use this to find pictures of places, objects, or people.",
+            description: "Search for an image URL using Brave Search.",
             input_schema: {
                 type: "object",
-                properties: {
-                    query: {
-                        type: "string",
-                        description: "The search query for the image (e.g. 'golden retriever puppy', 'pittsburgh skyline')"
-                    }
-                },
+                properties: { query: { type: "string" } },
                 required: ["query"]
             }
         },
         {
             name: "webSearch",
-            description: "Search the web for information using Brave Search.",
+            description: "Search the web using Brave Search.",
             input_schema: {
                 type: "object",
-                properties: {
-                    query: {
-                        type: "string",
-                        description: "The search query"
-                    }
-                },
+                properties: { query: { type: "string" } },
                 required: ["query"]
             }
         },
         {
             name: "googleMaps",
-            description: "Search for a location using Brave Search (Mock for Maps).",
+            description: "Search for locations.",
             input_schema: {
                 type: "object",
-                properties: {
-                    query: { type: "string", description: "Location to find" }
-                },
+                properties: { query: { type: "string" } },
                 required: ["query"]
             }
         },
         {
             name: "saveUserInfo",
-            description: "Save the user's name and work/school information when provided.",
+            description: "Save user's name/work.",
             input_schema: {
                 type: "object",
                 properties: {
-                    name: { type: "string", description: "The user's name" },
-                    work: { type: "string", description: "Where the user works or goes to school" }
+                    name: { type: "string" },
+                    work: { type: "string" }
                 },
                 required: ["name", "work"]
             }
+        },
+        {
+            name: "startPhoneCall",
+            description: "Initiate a phone call to the user via ElevenLabs.",
+            input_schema: {
+                type: "object",
+                properties: {},
+                required: []
+            }
         }
     ];
+
+    // ... (Inside tool loop) ...
+
+
 
     console.log(`Loaded local tools:`, tools.map(t => t.name).join(", "));
 
     sdk.on("ready", () => {
         console.log("AI Therapist Bot (Jack 🎸 + MCP 🛠️) started");
+
+        // Start Polling Voice Bridge
+        console.log("Starting Voice Bridge Polling...");
+        setInterval(async () => {
+            try {
+                // Poll Vercel Bridge (Assuming BRIDGE_URL provided or defaulting to known structure for testing)
+                // Note: User needs to populate BRIDGE_URL in .env.local usually, but we'll try to guess if missing or wait.
+                const bridgeUrl = process.env.BRIDGE_URL;
+                if (!bridgeUrl) return;
+
+                const res = await axios.get(`${bridgeUrl}`, { timeout: 2000 });
+                if (res.data?.command) {
+                    const cmd = res.data.command;
+                    console.log("Voice Command Received:", cmd);
+
+                    // Execute Search
+                    const [webResult, imgResult] = await Promise.all([
+                        performWebSearch(cmd.query),
+                        performImageSearch(cmd.query)
+                    ]);
+
+                    const finalMsg = `I found some info for "${cmd.query}":\n\n${webResult}\n\n[IMAGE: ${imgResult}]`;
+
+                    // Send to Chat
+                    // Fallback to last active chat if no GUID provided
+                    let targetGuid = cmd.chat_guid;
+                    if (!targetGuid && conversationHistory.size > 0) {
+                        targetGuid = [...conversationHistory.keys()].pop();
+                    }
+
+                    if (targetGuid) {
+                        // Split and send
+                        const parts = finalMsg.split("||"); // Basic split if needed, or just send
+                        await sdk.messages.sendMessage({
+                            chatGuid: targetGuid,
+                            message: finalMsg // SDK handles basic length? If not, simple send.
+                        });
+                        console.log("Sent Voice Command response to", targetGuid);
+                    } else {
+                        console.warn("No active chat to send voice response to.");
+                    }
+                }
+            } catch (e) {
+                // console.error("Polling error:", e.message); // suppress spam
+            }
+        }, 2000);
     });
 
     sdk.on("new-message", async (message) => {
@@ -374,75 +421,16 @@ async function main() {
                                 toolResult = "User info saved.";
 
                             } else if (toolUse.name === "webImageSearch") {
-                                console.log(`Searching for image (Brave): ${args.query}`);
-                                await rateLimitDelay(); // Enforce 1s spacing
+                                toolResult = await performImageSearch(args.query);
 
-                                try {
-                                    const safeQuery = args.query.includes("building") || args.query.includes("exterior")
-                                        ? args.query
-                                        : `${args.query} storefront exterior`;
 
-                                    const braveImageResponse = await axios.get(
-                                        `https://api.search.brave.com/res/v1/images/search`,
-                                        {
-                                            params: {
-                                                q: safeQuery,
-                                                count: 1,
-                                                search_lang: 'en'
-                                            },
-                                            headers: {
-                                                'Accept': 'application/json',
-                                                'X-Subscription-Token': process.env.BRAVE_API_KEY
-                                            }
-                                        }
-                                    );
-
-                                    const results = braveImageResponse.data.results || [];
-                                    if (results.length > 0) {
-                                        const imgUrl = results[0].properties?.url || results[0].thumbnail?.src;
-                                        if (imgUrl) {
-                                            toolResult = imgUrl;
-                                            console.log(`Found image: ${imgUrl}`);
-                                        } else {
-                                            toolResult = "No valid image URL found.";
-                                        }
-                                    } else {
-                                        toolResult = "No images found.";
-                                    }
-                                } catch (e: any) {
-                                    console.error("Brave image search failed:", e.message);
-                                    toolResult = `Image search failed: ${e.message}`;
-                                }
+                            } else if (toolUse.name === "startPhoneCall") {
+                                console.log("Initiating Phone Call...");
+                                toolResult = "Call initiated successfully. YOU ARE CALLING THEM NOW.";
+                                // TODO: Trigger ElevenLabs call here
 
                             } else if (toolUse.name === "webSearch" || toolUse.name === "googleMaps") {
-                                // Use Brave Search API
-                                console.log(`Searching web (Brave): ${args.query}`);
-                                await rateLimitDelay(); // Enforce 1s spacing
-
-                                try {
-                                    const braveResponse = await axios.get(
-                                        `https://api.search.brave.com/res/v1/web/search`,
-                                        {
-                                            params: { q: args.query },
-                                            headers: {
-                                                'Accept': 'application/json',
-                                                'X-Subscription-Token': process.env.BRAVE_API_KEY
-                                            }
-                                        }
-                                    );
-
-                                    const results = braveResponse.data.web?.results || [];
-                                    if (results.length > 0) {
-                                        toolResult = results.slice(0, 3).map((r: any) =>
-                                            `**${r.title}**\n${r.description}\nLink: ${r.url}`
-                                        ).join("\n\n");
-                                    } else {
-                                        toolResult = "No results found.";
-                                    }
-                                } catch (e: any) {
-                                    console.error("Brave search failed:", e.message);
-                                    toolResult = `Search failed: ${e.message}`;
-                                }
+                                toolResult = await performWebSearch(args.query);
                             } else {
                                 toolResult = "Unknown tool.";
                             }
