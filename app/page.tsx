@@ -2,10 +2,73 @@
 
 import { signIn, signOut } from "next-auth/react";
 import { useSession } from "next-auth/react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Shield, Zap, CheckCircle, LogOut } from 'lucide-react';
 
 export default function Home() {
   const { data: session, status } = useSession();
+  const searchParams = useSearchParams();
+  const phoneNumber = searchParams.get('num');
+  const [saveStatus, setSaveStatus] = useState<'pending' | 'saved' | 'already-exists'>('pending');
+
+  // Save to Supabase when session is created
+  useEffect(() => {
+    if (session && phoneNumber && saveStatus === 'pending') {
+      saveToSupabase();
+    }
+  }, [session]);
+
+  const saveToSupabase = async () => {
+    try {
+      const response = await fetch('/api/save-oauth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: phoneNumber?.replace(/\D/g, '') || '', // Remove non-digits and no +
+          oauthCode: (session as any)?.oauthCode || '',
+          email: session?.user?.email,
+        }),
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        if (result.alreadyExists) {
+          setSaveStatus('already-exists');
+        } else {
+          setSaveStatus('saved');
+          // Redirect after 3 seconds
+          setTimeout(() => {
+            window.close(); // Try to close the window
+            // If window doesn't close, could redirect somewhere
+          }, 3000);
+        }
+      } else {
+        console.error('Failed to save to Supabase');
+      }
+    } catch (error) {
+      console.error('Error saving to Supabase:', error);
+    }
+  };
+
+  // Reject if no phone number in URL
+  if (status === "unauthenticated" && !phoneNumber) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-md text-center">
+          <div className="bg-white rounded-3xl shadow-xl p-8 border border-gray-100">
+            <h1 className="text-3xl font-bold text-gray-900 mb-4">Access Denied</h1>
+            <p className="text-gray-600 mb-4">
+              This link is invalid. Please use the correct link with your phone number.
+            </p>
+            <p className="text-sm text-gray-500">
+              Example: yoursite.com?num=16301236433
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (status === "loading") {
     return (
@@ -83,14 +146,33 @@ export default function Home() {
     );
   }
 
-  // Authenticated - show success
+  // Authenticated - show message based on save status
+  if (session && saveStatus === 'already-exists') {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-md text-center">
+          <div className="bg-white rounded-3xl shadow-xl p-8 border border-gray-100">
+            <h1 className="text-3xl font-bold text-gray-900 mb-4">Already Registered</h1>
+            <p className="text-gray-600 mb-4">
+              This phone number has already been registered with Google OAuth.
+            </p>
+            <p className="text-sm text-gray-500">
+              You can close this window.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Authenticated - show success only on first time
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-purple-50 flex items-center justify-center p-6">
       <div className="w-full max-w-2xl">
         <div className="bg-white rounded-3xl shadow-2xl p-12 border border-gray-100 text-center">
           {/* Success Icon */}
           <div className="mb-6 flex justify-center">
-            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center animate-bounce">
+            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center">
               <CheckCircle className="w-12 h-12 text-green-600" />
             </div>
           </div>
@@ -102,6 +184,12 @@ export default function Home() {
           <p className="text-xl text-gray-600 mb-8">
             Your Google account has been connected
           </p>
+          
+          {saveStatus === 'saved' && (
+            <p className="text-sm text-gray-500 mb-8">
+              This window will close automatically in 3 seconds...
+            </p>
+          )}
 
           {/* User Info Card */}
           <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-2xl p-6 mb-8">
@@ -138,15 +226,6 @@ export default function Home() {
               </div>
             </div>
           </div>
-
-          {/* Sign Out Button */}
-          <button 
-            onClick={() => signOut()}
-            className="flex items-center justify-center gap-2 px-6 py-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors font-medium mx-auto"
-          >
-            <LogOut className="w-5 h-5" />
-            Sign Out
-          </button>
         </div>
       </div>
     </div>
