@@ -96,9 +96,10 @@ core rules:
 
 **STEP 1: Get their name**
 If they haven't told you their name yet, ask casually: "hey whats ur name?" or "who am i talking to?"
+After they tell you their name, ask them something VERY SPECIFIC based on context clues about what they might do or their interests. Show you're listening.
 
 **STEP 2: Get their affiliation**
-Once you have their name, ask for their school or company: "what school or job u at?" or "where u working/studying?"
+Once you have their name, ask for their school or company using: "what school do you go to?" or "where do you work?" (not "rn" - be timeless)
 
 **STEP 3: Search for context**
 Once you have BOTH name AND affiliation, use the completeOnboarding tool immediately. This will search for them online and prepare context.
@@ -335,14 +336,11 @@ async function saveUserToSupabase(
         const cleanPhone = phoneNumber.replace("+", "");
         
         const { data, error } = await supabaseServer
-            .from("therapist_users")
+            .from("checkrdata")
             .upsert(
                 {
                     phone_number: cleanPhone,
-                    name,
-                    affiliation: work,
-                    background_info: backgroundInfo || null,
-                    onboarded_at: new Date().toISOString(),
+                    description: backgroundInfo || null,
                 },
                 { onConflict: "phone_number" }
             );
@@ -548,10 +546,10 @@ async function main() {
             if (userProfile.onboardingStep === "pending" || userProfile.onboardingStep === "asked_name") {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their name yet. Your next message should casually ask for their name in a chill way.`;
             } else if (userProfile.onboardingStep === "asked_name" && userProfile.name && !userProfile.affiliation) {
-                currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You got their name (${userProfile.name}). Now ask for their affiliation (school or company).`;
+                currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You got their name (${userProfile.name}). First, ask them something VERY SPECIFIC and relevant to them based on what they might do or their interests - show you're genuinely curious. Then ask where they work or go to school using "where do you work?" or "what school do you go to?" (not "rn").`;
             } else if (userProfile.onboardingStep === "needs_signup") {
                 const signupLink = `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`;
-                currentSystemPrompt += `\n\n**ONBOARDING STATUS - SIGN-UP NEEDED:** They need to sign up to access calendar features. Send them this link: ${signupLink}. Be casual about it, like "hey u gotta sign up here to book appointments". Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool.`;
+                currentSystemPrompt += `\n\n**ONBOARDING STATUS - SIGN-UP NEEDED & FUN FACT:** They need to sign up to access calendar features. Now that you know their name (${userProfile.name}) and affiliation (${userProfile.affiliation}), throw in something fun or interesting about them to show you really know them. Then send the link: [LINK: ${signupLink}]. The || syntax will separate messages. Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool.`;
             } else if (userProfile.onboardingStep === "completed") {
                 currentSystemPrompt += `\n\n**USER PROFILE:**\nName: ${userProfile.name}\nAffiliation: ${userProfile.affiliation}`;
                 if (userProfile.backgroundInfo) {
@@ -625,10 +623,11 @@ async function main() {
                                 userProfile.affiliation = affiliation;
                                 userProfile.onboardingStep = "searching";
                                 
-                                // Search for background context
+                                // Search for background context and fun facts
                                 console.log(`Searching for context: ${name} ${affiliation}`);
                                 const backgroundInfo = await searchPersonBackground(name, affiliation);
                                 userProfile.backgroundInfo = backgroundInfo || "";
+                                console.log(`Background info found:`, backgroundInfo);
                                 
                                 // Generate sign-up link with their phone number
                                 const phoneNumber = message.handle?.address || "unknown";
@@ -638,29 +637,36 @@ async function main() {
                                 // Move to signup step
                                 userProfile.onboardingStep = "needs_signup";
                                 
-                                toolResult = `Sign-up needed! Tell the user to click this link to sign up and access the calendar: ${signupLink}. Explain they need to sign up to use the app's calendar features. Once they're signed up, they'll be all set!`;
+                                // Format with [LINK] so it gets sent separately
+                                toolResult = `Sign-up time! Tell the user "hey u gotta sign up to book appointments" and then include the link on its own line: [LINK: ${signupLink}]. Once they acknowledge they're signing up or signed up, they'll be all set!`;
 
                             } else if (toolUse.name === "finalizeOnboarding") {
                                 console.log(`Finalizing onboarding for:`, userProfile.name);
                                 const phoneNumber = message.handle?.address || "unknown";
                                 
+                                // Log the description before saving
+                                console.log(`Description for ${userProfile.name}:`, userProfile.backgroundInfo);
+                                
                                 // Save to Supabase
-                                await saveUserToSupabase(
+                                console.log(`Saving to Supabase - Phone: ${phoneNumber}, Name: ${userProfile.name}, Affiliation: ${userProfile.affiliation}`);
+                                const saved = await saveUserToSupabase(
                                     phoneNumber,
                                     userProfile.name || "",
                                     userProfile.affiliation || "",
                                     userProfile.backgroundInfo
                                 );
+                                console.log(`Supabase save result:`, saved);
                                 
                                 // Mark as completed
                                 userProfile.onboardingStep = "completed";
                                 
-                                // Generate personalized message based on context
+                                // Generate personalized message based on context with fun fact
                                 let personalizedMsg = `all set ${userProfile.name}! im ready on-demand whenever u need to chat`;
+                                let funFact = "";
                                 
-                                // Try to add personalized detail from context if available
+                                // Try to extract a fun fact from context
                                 if (userProfile.backgroundInfo) {
-                                    // Extract a company/school name from the context if possible
+                                    // Extract a company/school name and fun detail
                                     const lines = userProfile.backgroundInfo.split('\n');
                                     if (lines.length > 0) {
                                         const firstLine = lines[0];
@@ -670,10 +676,22 @@ async function main() {
                                             const company = companyMatch[1].trim();
                                             personalizedMsg = `all set ${userProfile.name}! is everything good at ${company}?`;
                                         }
+                                        
+                                        // Extract a fun fact from the description (second line or detail)
+                                        if (lines.length > 1) {
+                                            const detail = lines[1].replace(/^•\s*/, "").trim();
+                                            if (detail) {
+                                                funFact = detail;
+                                            }
+                                        }
                                     }
                                 }
                                 
-                                toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" and that you're ready whenever they need.`;
+                                if (funFact) {
+                                    toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" then throw in a fun fact based on what you learned: "${funFact}". Let them know you're ready whenever they need.`;
+                                } else {
+                                    toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" and that you're ready whenever they need.`;
+                                }
 
                             } else if (toolUse.name === "webImageSearch") {
                                 toolResult = await performImageSearch(args.query);
@@ -727,6 +745,7 @@ async function main() {
             // Check for reaction in brackets
             let reactionType = "";
             let imageToDownload = "";
+            let linkToSend = "";
 
             // Matches [love], [like], etc.
             const reactionMatch = finalReplyText.match(/^\[(love|like|dislike|laugh|emphasize|question)\]/i);
@@ -742,6 +761,13 @@ async function main() {
                 finalReplyText = finalReplyText.replace(imageMatch[0], "").trim();
             }
 
+            // Matches [LINK: url] - send as separate message
+            const linkMatch = finalReplyText.match(/\[LINK:\s*(https?:\/\/[^\]]+)\]/i);
+            if (linkMatch) {
+                linkToSend = linkMatch[1].trim();
+                finalReplyText = finalReplyText.replace(linkMatch[0], "").trim();
+            }
+
             // Send reply text
             const parts = finalReplyText.split("||").map(p => p.trim()).filter(p => p.length > 0);
             for (const part of parts) {
@@ -750,6 +776,20 @@ async function main() {
                     message: part,
                 });
                 console.log(`Replied: ${response?.guid}`);
+            }
+
+            // Send link as separate message if found
+            if (linkToSend) {
+                try {
+                    console.log(`Sending link: ${linkToSend}`);
+                    const linkResponse = await sdk.messages.sendMessage({
+                        chatGuid: chat.guid,
+                        message: linkToSend,
+                    });
+                    console.log(`Link sent: ${linkResponse?.guid}`);
+                } catch (err: any) {
+                    console.error(`Failed to send link:`, err);
+                }
             }
 
             // Send image if found
