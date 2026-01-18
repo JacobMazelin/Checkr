@@ -4,7 +4,7 @@ import * as dotenv from "dotenv";
 import path from "path";
 import { writeFile, unlink } from "fs/promises";
 import axios from "axios";
-import { search, searchImages, SafeSearchType } from "duck-duck-scrape";
+import { supabaseServer } from "../lib/supabase";
 
 // Load .env.local from project root
 dotenv.config({ path: path.join(__dirname, "../.env.local") });
@@ -35,13 +35,33 @@ const anthropic = new Anthropic({
 // Simple In-Memory State for User Profile
 interface UserProfile {
     name: string | null;
-    work: string | null;
+    affiliation: string | null;
     backgroundInfo: string | null;
+    onboardingStep: "pending" | "asked_name" | "asked_affiliation" | "searching" | "completed";
 }
+
+// Map of phone numbers to user profiles
+const userProfiles: Map<string, UserProfile> = new Map();
+
+function getOrCreateUserProfile(phoneNumber: string): UserProfile {
+    const key = phoneNumber.replace("+", "");
+    if (!userProfiles.has(key)) {
+        userProfiles.set(key, {
+            name: null,
+            affiliation: null,
+            backgroundInfo: null,
+            onboardingStep: "pending",
+        });
+    }
+    return userProfiles.get(key)!;
+}
+
+// Legacy in-memory profile (for backward compatibility)
 const userProfile: UserProfile = {
     name: null,
-    work: null,
+    affiliation: null,
     backgroundInfo: null,
+    onboardingStep: "pending",
 };
 
 // Conversation History per Chat (keyed by chat GUID)
@@ -68,6 +88,29 @@ core rules:
 - be curious: always include a relevant follow-up question or prompt
 - do not volunteer personal or system details, only provide self-info when explicitly asked
 - stay warm and lightly playful as rapport grows
+
+---
+
+### ONBOARDING FLOW (CRITICAL IF NOT ONBOARDED)
+**Your goal is to complete the 3-step onboarding process:**
+
+**STEP 1: Get their name**
+If they haven't told you their name yet, ask casually: "hey whats ur name?" or "who am i talking to?"
+
+**STEP 2: Get their affiliation**
+Once you have their name, ask for their school or company: "what school or job u at?" or "where u working/studying?"
+
+**STEP 3: Complete onboarding**
+Once you have BOTH name AND affiliation, use the completeOnboarding tool immediately. This will:
+- Search for them online to get background context
+- Save them to the database
+- Generate a personalized welcome message about their role/company
+
+**KEY RULES:**
+- Extract the name/affiliation naturally from their messages (don't ask them to call a tool)
+- Only call completeOnboarding ONCE you have both pieces of info
+- Keep the conversation flowing naturally while gathering info
+- After onboarding completes, you'll have their background context ready
 
 ---
 
@@ -129,7 +172,7 @@ always keep messages lowercase, concise, and inline with the persona rules above
 
 ### IMAGES
 You can send images of places or things.
-To send an image, use the \`webImageSearch\` tool to find a URL.
+To send an image, use the webImageSearch tool to find a URL.
 If you find a valid image URL you want to show the user, output it on a new line in this format:
 [IMAGE: https://example.com/image.jpg]
 Only use this for actual image URLs returned by tools.
@@ -141,7 +184,7 @@ You are a concierge for the user. When asked to find something (therapist, gym, 
     - **Name** (e.g., "Dr. Sarah Smith" or "Pittsburgh Therapy Center")
     - **Location/Address** (e.g., "Shadyside", "123 Main St")
     - **Key Detail** (e.g., "focuses on anxiety", "takes insurance", "4.9 stars")
-3.  **IMAGE MANDATORY**: Use \`webImageSearch\` to find a photo of the #1 recommendation.
+3.  **IMAGE MANDATORY**: Use webImageSearch to find a photo of the #1 recommendation.
 4.  **NO DIRECTORY LINKS**: Do not send links to Yelp, Zocdoc, or Psychology Today search pages. Send links to the *specific* business websites if found.
 
 **EXAMPLE GOOD RESPONSE:**
@@ -159,8 +202,8 @@ do any of those vibes match what ur looking for?"
 "i found some lists on psychology today, check them out here [link]" ❌
 
 **PROACTIVE IMAGES:**
-- **RULE:** ANY time you search for a place, ALSO use \`webImageSearch\` to get a picture.
-- Output images as: \`[IMAGE: url]\`
+- **RULE:** ANY time you search for a place, ALSO use webImageSearch to get a picture.
+- Output images as: [IMAGE: url]
 - AVOID: istockphoto, gettyimages, twitter/x (they block downloads).
 `;
 
@@ -204,6 +247,113 @@ async function compressInput(input: string): Promise<string | null> {
     }
 }
 
+
+// Helper functions for web search and image search
+async function performWebSearch(query: string): Promise<string> {
+    try {
+        await rateLimitDelay();
+        const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
+            params: { q: query },
+            headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
+            timeout: 10000,
+        });
+        
+        const results = response.data.web || [];
+        if (!results.length) return "No results found.";
+        
+        return results
+            .slice(0, 3)
+            .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.url}\n${r.description || ""}`)
+            .join("\n\n");
+    } catch (err: any) {
+        console.error("Web search failed:", err.message);
+        return "Search failed.";
+    }
+}
+
+async function performImageSearch(query: string): Promise<string> {
+    try {
+        await rateLimitDelay();
+        const response = await axios.get("https://api.search.brave.com/res/v1/images/search", {
+            params: { q: query },
+            headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
+            timeout: 10000,
+        });
+        
+        const images = response.data.images || [];
+        if (!images.length) return "";
+        
+        return images[0].url || "";
+    } catch (err: any) {
+        console.error("Image search failed:", err.message);
+        return "";
+    }
+}
+
+// Function to search for person and get background info
+async function searchPersonBackground(name: string, affiliation: string): Promise<string> {
+    try {
+        const query = `${name} ${affiliation}`;
+        console.log(`Searching background for: ${query}`);
+        
+        await rateLimitDelay();
+        const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
+            params: { q: query, count: 5 },
+            headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
+            timeout: 10000,
+        });
+        
+        const results = response.data.web || [];
+        if (!results.length) return "";
+        
+        // Extract key info from first 3 results
+        const backgroundLines = results
+            .slice(0, 3)
+            .map((r: any) => `• ${r.title}: ${r.description || ""}`)
+            .join("\n");
+        
+        return backgroundLines;
+    } catch (err: any) {
+        console.error("Background search failed:", err.message);
+        return "";
+    }
+}
+
+// Function to save user to Supabase
+async function saveUserToSupabase(
+    phoneNumber: string,
+    name: string,
+    work: string,
+    backgroundInfo?: string
+): Promise<boolean> {
+    try {
+        const cleanPhone = phoneNumber.replace("+", "");
+        
+        const { data, error } = await supabaseServer
+            .from("therapist_users")
+            .upsert(
+                {
+                    phone_number: cleanPhone,
+                    name,
+                    affiliation: work,
+                    background_info: backgroundInfo || null,
+                    onboarded_at: new Date().toISOString(),
+                },
+                { onConflict: "phone_number" }
+            );
+        
+        if (error) {
+            console.error("Supabase save error:", error);
+            return false;
+        }
+        
+        console.log("User saved to Supabase:", cleanPhone);
+        return true;
+    } catch (err: any) {
+        console.error("Failed to save user:", err.message);
+        return false;
+    }
+}
 
 async function main() {
     const sdk = createSDK({
@@ -259,6 +409,18 @@ async function main() {
                 type: "object",
                 properties: {},
                 required: []
+            }
+        },
+        {
+            name: "completeOnboarding",
+            description: "Complete user onboarding after gathering name, affiliation, and background info.",
+            input_schema: {
+                type: "object",
+                properties: {
+                    name: { type: "string", description: "User's full name" },
+                    affiliation: { type: "string", description: "User's school or company" }
+                },
+                required: ["name", "affiliation"]
             }
         }
     ];
@@ -362,13 +524,15 @@ async function main() {
             // Dynamic System Prompt based on User Profile
             let currentSystemPrompt = SYSTEM_PROMPT;
 
-            // Should we ask for info?
-            if (!userProfile.name || !userProfile.work) {
-                currentSystemPrompt += `\n\n**CRITICAL GOAL:** You do not know who the user is yet. Your HIGHEST PRIORITY is to casually ask for their name and what they do for work or school. Do not be annoying, but try to get this info early.`;
-            } else {
-                currentSystemPrompt += `\n\n**USER PROFILE:**\nName: ${userProfile.name}\nWork/School: ${userProfile.work}`;
+            // Determine onboarding status and add context
+            if (userProfile.onboardingStep === "pending" || userProfile.onboardingStep === "asked_name") {
+                currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their name yet. Your next message should casually ask for their name in a chill way.`;
+            } else if (userProfile.onboardingStep === "asked_name" && userProfile.name && !userProfile.affiliation) {
+                currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You got their name (${userProfile.name}). Now ask for their affiliation (school or company).`;
+            } else if (userProfile.onboardingStep === "completed") {
+                currentSystemPrompt += `\n\n**USER PROFILE:**\nName: ${userProfile.name}\nAffiliation: ${userProfile.affiliation}`;
                 if (userProfile.backgroundInfo) {
-                    currentSystemPrompt += `\n\n**BACKGROUND CONTEXT (Found Online):**\n${userProfile.backgroundInfo}\n\nUse this info to ask relevant questions or make connections, but don't be creepy about "stalking" them. Just act like you know context.`;
+                    currentSystemPrompt += `\n\n**BACKGROUND CONTEXT (Found Online):**\n${userProfile.backgroundInfo}\n\nUse this info to ask relevant questions or make connections. They're all set and ready for on-demand appointments!`;
                 }
             }
 
@@ -417,12 +581,61 @@ async function main() {
                             if (toolUse.name === "saveUserInfo") {
                                 console.log(`Saving user info:`, args);
                                 userProfile.name = args.name;
-                                userProfile.work = args.work;
+                                userProfile.affiliation = args.affiliation || args.work;
+                                
+                                // Track onboarding progression
+                                if (!userProfile.name) {
+                                    userProfile.onboardingStep = "asked_name";
+                                } else if (!userProfile.affiliation) {
+                                    userProfile.onboardingStep = "asked_affiliation";
+                                }
+                                
                                 toolResult = "User info saved.";
+
+                            } else if (toolUse.name === "completeOnboarding") {
+                                console.log(`Completing onboarding for:`, args);
+                                const name = args.name;
+                                const affiliation = args.affiliation;
+                                
+                                // Update the user profile
+                                userProfile.name = name;
+                                userProfile.affiliation = affiliation;
+                                userProfile.onboardingStep = "searching";
+                                
+                                // Search for background context
+                                console.log(`Searching for context: ${name} ${affiliation}`);
+                                const backgroundInfo = await searchPersonBackground(name, affiliation);
+                                userProfile.backgroundInfo = backgroundInfo || "";
+                                
+                                // Save to Supabase (use the phone number from the message)
+                                const phoneNumber = message.handle?.address || "unknown";
+                                await saveUserToSupabase(phoneNumber, name, affiliation, backgroundInfo);
+                                
+                                // Mark as completed
+                                userProfile.onboardingStep = "completed";
+                                
+                                // Generate personalized message based on context
+                                let personalizedMsg = `all set ${name}! im ready on-demand whenever u need to chat`;
+                                
+                                // Try to add personalized detail from context if available
+                                if (backgroundInfo) {
+                                    // Extract a company/school name from the context if possible
+                                    const lines = backgroundInfo.split('\n');
+                                    if (lines.length > 0) {
+                                        const firstLine = lines[0];
+                                        // Look for common patterns like "at Company" or "School of..."
+                                        const companyMatch = firstLine.match(/\b(?:at|from|works at|studies at|from)\s+([^:•]+)/i);
+                                        if (companyMatch) {
+                                            const company = companyMatch[1].trim();
+                                            personalizedMsg = `all set ${name}! is everything good at ${company}?`;
+                                        }
+                                    }
+                                }
+                                
+                                toolResult = `Onboarding complete! Tell the user: "${personalizedMsg}" and that you're ready whenever they need.`;
 
                             } else if (toolUse.name === "webImageSearch") {
                                 toolResult = await performImageSearch(args.query);
-
 
                             } else if (toolUse.name === "startPhoneCall") {
                                 console.log("Initiating Phone Call...");
