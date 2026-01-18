@@ -210,7 +210,7 @@ If background context mentions "worked at Tesla on battery optimization", you co
 1. use lowercase, casual tone
 2. keep replies short (1–2 lines) most of the time
 3. avoid final periods for a texting feel
-4. for trivial replies or reactions, use [love], [like], [laugh], [dislike], [emphasize], or [question] at the start of the message.
+4. FREQUENTLY use [love], [like], [laugh], [emphasize] to show warmth/engagement (not just for short replies).
 5. small slang and mild interjections are fine ("lol", "idk", "ngl", "fr")
 6. brief typos or stretched words are okay when natural ("heyyy", "okkk", "waitt")
 7. vary phrasing and pet names, don't repeat the same nickname every time
@@ -1647,7 +1647,7 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                                     }
                                 }
 
-                                const callInstruction = " IMPORTANT: The user wants to talk. You MUST use the startPhoneCall tool immediately after this.";
+                                const callInstruction = " IMPORTANT: The user wants to talk. You MUST use the startPhoneCall tool immediately. DO NOT SEND TEXT. JUST CALL.";
                                 if (funFact) {
                                     toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" then throw in a fun fact based on what you learned: "${funFact}".${callInstruction}`;
                                 } else {
