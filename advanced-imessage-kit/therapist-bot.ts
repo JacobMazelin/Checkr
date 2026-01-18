@@ -50,14 +50,14 @@ interface UserProfile {
     hasSearchedBackground: boolean;
     hasSentSignupLink: boolean;
     onboardingStep:
-        | "pending"
-        | "asked_name"
-        | "asked_affiliation"
-        | "searching"
-        | "ask_followup"
-        | "needs_signup"
-        | "learning_more"
-        | "completed";
+    | "pending"
+    | "asked_name"
+    | "asked_affiliation"
+    | "searching"
+    | "ask_followup"
+    | "needs_signup"
+    | "learning_more"
+    | "completed";
 }
 
 // Map of phone numbers to user profiles
@@ -124,27 +124,23 @@ core rules:
 
 ---
 
-### ONBOARDING FLOW (CRITICAL IF NOT ONBOARDED)
-**Your goal is to complete the 5-step onboarding process:**
+### ONBOARDING FLOW (CRITICAL 10-STEP SEQUENCE)
+**You must guide the user through this exact 10-step flow:**
 
-**STEP 1: Get their full name**
-If they haven't told you their full name yet, ask casually: "hey whats ur full name?" or "who am i talking to?"
-After they tell you their full name, ask them something VERY SPECIFIC based on context clues about what they might do or their interests. Show you're listening.
-
-**STEP 2: Get their affiliation**
-Once you have their name, ask for their school or company using: "what school do you go to?" or "where do you work?" (not "rn" - be timeless)
-
-**STEP 3: Save their info (triggers automatic search)**
-Once you have BOTH name AND affiliation, call saveUserInfo with both fields. This will AUTOMATICALLY:
-- Search for them online in the background
-- Extract an interesting fact about them
-- Give you a follow-up question to ask
-
-**STEP 4: Ask a follow-up about what you found**
-The system will give you a personalized follow-up question based on what it found (like their internships, projects, etc). Ask it naturally and wait for their response.
-
-**STEP 5: Send sign-up link**
-After they respond to your follow-up, tell them they need to sign up to access booking features. The link will be: https://nex-hacks-oath.vercel.app?num=[their-phone] (you'll insert their actual phone number). Send it with [LINK: url] format so it sends as a separate message.
+Step 1: User says Hi.
+Step 2: You say Hi & Ask for Name ("hey whats ur name?").
+Step 3: User gives Name.
+Step 4: You Ask for University/Job ("nice to meet u [name] || where do u go to school or work?").
+Step 5: User gives Uni/Job.
+Step 6: You (via tool) Research them, Make a Remark, and Ask WHY they are texting.
+   - Example: "oh i saw you're at [place] doing [project]... so what brings u to reach out today?"
+   - DO NOT ASK about the project yet. Ask about their REASON for texting.
+Step 7: User Responds (explaining mental state).
+Step 8: You Guess the Cause (tied to job/uni) & Give Google Sign-In.
+   - Example: "is it because of [project]? || we should talk properly || u gotta sign in here first tho: [LINK]"
+   - You MUST send the link here.
+Step 9: User Asks to Call.
+Step 10: You Call them (startPhoneCall).
 
 **STEP 6: Send personalized welcome**
 Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool. This will save them to the database and send a personalized welcome message.
@@ -437,7 +433,7 @@ interface CallContext {
 // Generate a summary of recent conversation for voice context
 function generateConversationSummary(messages: { role: string; content: string | any }[]): string {
     if (!messages.length) return "No conversation yet";
-    
+
     // Create a brief summary of what was discussed, NOT the full conversation
     // This prevents the voice agent from repeating the entire conversation
     const text = messages
@@ -445,7 +441,7 @@ function generateConversationSummary(messages: { role: string; content: string |
         .map((m) => m.content as string)
         .join(" ")
         .toLowerCase();
-    
+
     const topics: string[] = [];
     if (text.includes("stress") || text.includes("anxiety") || text.includes("worried")) topics.push("stress/anxiety");
     if (text.includes("sleep") || text.includes("tired")) topics.push("sleep issues");
@@ -454,7 +450,7 @@ function generateConversationSummary(messages: { role: string; content: string |
     if (text.includes("goal") || text.includes("want") || text.includes("plan")) topics.push("goals/plans");
     if (text.includes("happy") || text.includes("excited") || text.includes("good")) topics.push("positive mood");
     if (text.includes("sad") || text.includes("down") || text.includes("lonely")) topics.push("feeling low");
-    
+
     if (topics.length === 0) return "General mental health check-in";
     return `Topics discussed: ${topics.join(", ")}`;
 }
@@ -1403,7 +1399,7 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                                 if (userProfile.name && userProfile.affiliation && !userProfile.hasSearchedBackground) {
                                     console.log("Auto-triggering background search now that we have name + affiliation...");
                                     const phoneNumber = message.handle?.address || "unknown";
-                                    
+
                                     userProfile.onboardingStep = "searching";
                                     const backgroundInfo = await searchPersonBackground(userProfile.name, userProfile.affiliation);
                                     const cleanedBackgroundInfo = sanitizeSearchData(backgroundInfo || "");
@@ -1415,8 +1411,18 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                                     if (interestingFact) {
                                         userProfile.interestingFact = interestingFact.fact;
                                         userProfile.hasSearchedBackground = true;
-                                        userProfile.onboardingStep = "ask_followup";
-                                        toolResult = `Great! Now ask them a follow-up question based on what you found. Use this: "${interestingFact.question}"`;
+                                        userProfile.onboardingStep = "learning_more";
+
+                                        // Prepare link for Step 8 (but don't send yet)
+                                        const oauthToken = await getOAuthTokenForPhone(phoneNumber);
+                                        let linkInstruction = "";
+                                        if (!oauthToken) {
+                                            const cleanPhone = phoneNumber.replace(/\D/g, '');
+                                            const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
+                                            linkInstruction = `\nNOTE FOR FUTURE (Step 8): When they reply with their reason, you MUST send this link: [LINK: ${signupLink}]\nRemember this link for the next turn.`;
+                                        }
+
+                                        toolResult = `Research done. I found: "${interestingFact.fact}".\nYOUR GOAL:\n1. Mention the fact casually.\n2. IMMEDIATELY ask: "so what brings u to reach out today?" (or "why'd u text?").\n${linkInstruction}`;
 
                                         // Save extracted fact into Supabase immediately as description
                                         try {
@@ -1708,7 +1714,7 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                     await sdk.chats.startTyping(chat.guid);
                     await new Promise((r) => setTimeout(r, 300));
                     await sdk.chats.stopTyping(chat.guid);
-                    
+
                     console.log(`Sending link: ${linkToSend}`);
                     const linkResponse = await sdk.messages.sendMessage({
                         chatGuid: chat.guid,
@@ -1716,7 +1722,7 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                     });
                     console.log(`Link sent: ${linkResponse?.guid}`);
                     userProfile.hasSentSignupLink = true;
-                    
+
                     // Immediately filter this link from history
                     const signupLinkPattern = /https:\/\/nex-hacks-oath\.vercel\.app\?num=/;
                     history = history.filter((msg: any) => {
