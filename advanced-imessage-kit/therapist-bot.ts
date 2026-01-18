@@ -37,7 +37,7 @@ interface UserProfile {
     name: string | null;
     affiliation: string | null;
     backgroundInfo: string | null;
-    onboardingStep: "pending" | "asked_name" | "asked_affiliation" | "searching" | "completed";
+    onboardingStep: "pending" | "asked_name" | "asked_affiliation" | "searching" | "needs_signup" | "completed";
 }
 
 // Map of phone numbers to user profiles
@@ -92,7 +92,7 @@ core rules:
 ---
 
 ### ONBOARDING FLOW (CRITICAL IF NOT ONBOARDED)
-**Your goal is to complete the 3-step onboarding process:**
+**Your goal is to complete the 5-step onboarding process:**
 
 **STEP 1: Get their name**
 If they haven't told you their name yet, ask casually: "hey whats ur name?" or "who am i talking to?"
@@ -100,17 +100,22 @@ If they haven't told you their name yet, ask casually: "hey whats ur name?" or "
 **STEP 2: Get their affiliation**
 Once you have their name, ask for their school or company: "what school or job u at?" or "where u working/studying?"
 
-**STEP 3: Complete onboarding**
-Once you have BOTH name AND affiliation, use the completeOnboarding tool immediately. This will:
-- Search for them online to get background context
-- Save them to the database
-- Generate a personalized welcome message about their role/company
+**STEP 3: Search for context**
+Once you have BOTH name AND affiliation, use the completeOnboarding tool immediately. This will search for them online and prepare context.
+
+**STEP 4: Send sign-up link**
+The tool will automatically generate a sign-up link. Tell them they need to sign up to access the calendar features. The link will be provided in the tool result.
+
+**STEP 5: Send personalized welcome**
+Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool. This will save them to the database and send a personalized welcome message about their role/company.
 
 **KEY RULES:**
 - Extract the name/affiliation naturally from their messages (don't ask them to call a tool)
 - Only call completeOnboarding ONCE you have both pieces of info
 - Keep the conversation flowing naturally while gathering info
-- After onboarding completes, you'll have their background context ready
+- After getting the sign-up link from completeOnboarding, share it and wait for acknowledgment
+- Call finalizeOnboarding after they acknowledge they're signed up or ready
+- After finalization, they're all set and you can chat freely with their profile context
 
 ---
 
@@ -422,6 +427,15 @@ async function main() {
                 },
                 required: ["name", "affiliation"]
             }
+        },
+        {
+            name: "finalizeOnboarding",
+            description: "Finalize onboarding after user has signed up. Saves to Supabase and sends personalized welcome.",
+            input_schema: {
+                type: "object",
+                properties: {},
+                required: []
+            }
         }
     ];
 
@@ -535,6 +549,9 @@ async function main() {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You haven't asked for their name yet. Your next message should casually ask for their name in a chill way.`;
             } else if (userProfile.onboardingStep === "asked_name" && userProfile.name && !userProfile.affiliation) {
                 currentSystemPrompt += `\n\n**ONBOARDING STATUS:** You got their name (${userProfile.name}). Now ask for their affiliation (school or company).`;
+            } else if (userProfile.onboardingStep === "needs_signup") {
+                const signupLink = `https://nex-hacks-oath.vercel.app?num=${message.handle?.address?.replace("+", "") || "unknown"}`;
+                currentSystemPrompt += `\n\n**ONBOARDING STATUS - SIGN-UP NEEDED:** They need to sign up to access calendar features. Send them this link: ${signupLink}. Be casual about it, like "hey u gotta sign up here to book appointments". Once they acknowledge they're signing up or signed up, use the finalizeOnboarding tool.`;
             } else if (userProfile.onboardingStep === "completed") {
                 currentSystemPrompt += `\n\n**USER PROFILE:**\nName: ${userProfile.name}\nAffiliation: ${userProfile.affiliation}`;
                 if (userProfile.backgroundInfo) {
@@ -613,32 +630,50 @@ async function main() {
                                 const backgroundInfo = await searchPersonBackground(name, affiliation);
                                 userProfile.backgroundInfo = backgroundInfo || "";
                                 
-                                // Save to Supabase (use the phone number from the message)
+                                // Generate sign-up link with their phone number
                                 const phoneNumber = message.handle?.address || "unknown";
-                                await saveUserToSupabase(phoneNumber, name, affiliation, backgroundInfo);
+                                const cleanPhone = phoneNumber.replace("+", "");
+                                const signupLink = `https://nex-hacks-oath.vercel.app?num=${cleanPhone}`;
+                                
+                                // Move to signup step
+                                userProfile.onboardingStep = "needs_signup";
+                                
+                                toolResult = `Sign-up needed! Tell the user to click this link to sign up and access the calendar: ${signupLink}. Explain they need to sign up to use the app's calendar features. Once they're signed up, they'll be all set!`;
+
+                            } else if (toolUse.name === "finalizeOnboarding") {
+                                console.log(`Finalizing onboarding for:`, userProfile.name);
+                                const phoneNumber = message.handle?.address || "unknown";
+                                
+                                // Save to Supabase
+                                await saveUserToSupabase(
+                                    phoneNumber,
+                                    userProfile.name || "",
+                                    userProfile.affiliation || "",
+                                    userProfile.backgroundInfo
+                                );
                                 
                                 // Mark as completed
                                 userProfile.onboardingStep = "completed";
                                 
                                 // Generate personalized message based on context
-                                let personalizedMsg = `all set ${name}! im ready on-demand whenever u need to chat`;
+                                let personalizedMsg = `all set ${userProfile.name}! im ready on-demand whenever u need to chat`;
                                 
                                 // Try to add personalized detail from context if available
-                                if (backgroundInfo) {
+                                if (userProfile.backgroundInfo) {
                                     // Extract a company/school name from the context if possible
-                                    const lines = backgroundInfo.split('\n');
+                                    const lines = userProfile.backgroundInfo.split('\n');
                                     if (lines.length > 0) {
                                         const firstLine = lines[0];
                                         // Look for common patterns like "at Company" or "School of..."
                                         const companyMatch = firstLine.match(/\b(?:at|from|works at|studies at|from)\s+([^:•]+)/i);
                                         if (companyMatch) {
                                             const company = companyMatch[1].trim();
-                                            personalizedMsg = `all set ${name}! is everything good at ${company}?`;
+                                            personalizedMsg = `all set ${userProfile.name}! is everything good at ${company}?`;
                                         }
                                     }
                                 }
                                 
-                                toolResult = `Onboarding complete! Tell the user: "${personalizedMsg}" and that you're ready whenever they need.`;
+                                toolResult = `Onboarding finalized! Tell the user: "${personalizedMsg}" and that you're ready whenever they need.`;
 
                             } else if (toolUse.name === "webImageSearch") {
                                 toolResult = await performImageSearch(args.query);
