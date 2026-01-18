@@ -17,6 +17,7 @@ app.add_middleware(
 # Get base URL from environment or use default
 BASE_URL = os.getenv("NEXTAUTH_URL", "http://localhost:3000")
 CALENDAR_API = f"{BASE_URL}/api/calendar"
+SEARCH_API = f"{BASE_URL}/api/search"
 
 # Request models
 class FindFreeTimesRequest(BaseModel):
@@ -31,6 +32,9 @@ class SendConfirmationRequest(BaseModel):
     phone_number: str
     date: str
     time: str
+
+class SearchRequest(BaseModel):
+    query: str
 
 @app.get("/api")
 async def root():
@@ -92,4 +96,34 @@ async def send_confirmation(request: SendConfirmationRequest):
             return response.json()
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"Calendar API error: {str(e)}")
+
+@app.post("/api/search/image")
+async def search_image(request: SearchRequest):
+    """Search for images using Brave Image Search"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{SEARCH_API}/image",
+                json={"query": request.query},
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Search API error: {str(e)}")
+
+@app.post("/api/search/web-image")
+async def search_web_image(request: SearchRequest):
+    """Search for images and web results combined"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{SEARCH_API}/web-image",
+                json={"query": request.query},
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Search API error: {str(e)}")
 

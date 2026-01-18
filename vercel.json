@@ -36,6 +36,14 @@
       "dest": "/api/calendar/send-confirmation"
     },
     {
+      "src": "/api/search/image",
+      "dest": "/api/search/image"
+    },
+    {
+      "src": "/api/search/web-image",
+      "dest": "/api/search/web-image"
+    },
+    {
       "src": "/api/voice-bridge",
       "dest": "/api/voice-bridge"
     },
