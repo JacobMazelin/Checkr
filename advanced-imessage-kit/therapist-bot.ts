@@ -386,44 +386,38 @@ function sanitizeAnthropicMessages(msgs: any[]): any[] {
 async function performWebSearch(query: string): Promise<string> {
     try {
         await rateLimitDelay();
-
-        // Prefer Brave if configured
-        if (process.env.BRAVE_API_KEY) {
-            const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
-                params: { q: query },
-                headers: { Accept: "application/json", "X-Subscription-Token": process.env.BRAVE_API_KEY },
+        const apiKey = process.env.BRAVE_API_KEY;
+        if (!apiKey) {
+            // Fallback: Wikipedia OpenSearch (no auth)
+            const wiki = await axios.get("https://en.wikipedia.org/w/api.php", {
+                params: { action: "opensearch", search: query, limit: 3, format: "json" },
                 timeout: 10000,
             });
-
-            const results = response.data.web?.results || [];
-            if (!results.length) return "No results found.";
-
-            return results
-                .slice(0, 3)
-                .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.description || "No description"}\nURL: ${r.url}`)
+            const titles: string[] = wiki.data[1] || [];
+            const descs: string[] = wiki.data[2] || [];
+            const urls: string[] = wiki.data[3] || [];
+            if (!titles.length) return "No results found.";
+            return titles
+                .map((t, i) => `${i + 1}. ${t}\n${descs[i] || "No description"}\nURL: ${urls[i] || ""}`)
                 .join("\n\n");
         }
 
-        // Fallback to Serper (Google) if available
-        if (process.env.SERPER_API_KEY) {
-            const response = await axios.post(
-                "https://google.serper.dev/search",
-                { q: query, num: 5 },
-                { headers: { "X-API-KEY": process.env.SERPER_API_KEY }, timeout: 10000 },
-            );
-            const results = response.data.organic || [];
-            if (!results.length) return "No results found.";
-            return results
-                .slice(0, 3)
-                .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.snippet || "No description"}\nURL: ${r.link}`)
-                .join("\n\n");
-        }
+        const response = await axios.get("https://api.search.brave.com/res/v1/web/search", {
+            params: { q: query },
+            headers: { Accept: "application/json", "X-Subscription-Token": apiKey },
+            timeout: 10000,
+        });
 
-        // If no providers configured
-        console.warn("No search provider configured (BRAVE_API_KEY or SERPER_API_KEY missing).");
-        return "Search unavailable right now.";
+        const results = response.data.web?.results || [];
+        if (!results.length) return "No results found.";
+
+        // Use search result metadata directly (title + description)
+        return results
+            .slice(0, 3)
+            .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.description || "No description"}\nURL: ${r.url}`)
+            .join("\n\n");
     } catch (err: any) {
-        console.error("Web search failed:", err?.response?.data || err.message);
+        console.error("Web search failed:", err.message);
         return "Search failed.";
     }
 }
@@ -459,17 +453,12 @@ interface CallContext {
 // Generate a summary of recent conversation for voice context
 function generateConversationSummary(messages: { role: string; content: string | any }[]): string {
     if (!messages.length) return "";
-    // Only include recent USER messages to avoid the agent reading assistant text or names aloud
-    const recentUserMessages = messages
-        .slice(-8)
-        .filter((m) => m.role === "user" && typeof m.content === "string")
-        .map((m) => (m.content as string).trim())
-        .filter((t) => t.length > 0)
-        .map((t) => t.slice(0, 160));
-
-    // Join with separators but no role labels; this is non-verbal context
-    const summary = recentUserMessages.join(" | ");
-    return summary.slice(0, 500);
+    const recent = messages.slice(-6);
+    const summaryParts = recent
+        .filter((m) => typeof m.content === "string")
+        .map((m) => `${m.role === "user" ? "User" : "Jack"}: ${(m.content as string).slice(0, 100)}`)
+        .join(" | ");
+    return summaryParts.slice(0, 500);
 }
 
 // Detect mood from conversation history
@@ -526,15 +515,13 @@ async function initiateElevenLabsCall(
 
         // Add dynamic variables if context provided
         if (context) {
-            // Pass only minimal, non-verbal context; do NOT include summary to avoid it being read aloud
             requestBody.conversation_initiation_client_data = {
                 dynamic_variables: {
                     user_name: context.userName || "friend",
                     user_affiliation: context.userAffiliation || "",
+                    // Intentionally omit conversation_summary to avoid it being read aloud
+                    mood_context: context.moodContext || "neutral",
                     user_phone: normalizedPhone,
-                    // Advisory note for agent templates that support variables; not for speaking
-                    context_note:
-                        "Internal note: Use first-person (I/me/my). Do not read any variables aloud. Speak naturally and empathetically.",
                 },
             };
         }
@@ -548,7 +535,7 @@ async function initiateElevenLabsCall(
         });
 
         console.log("ElevenLabs call initiated:", response.data);
-        return { success: true, message: "Call initiated! Your phone should ring in a moment." };
+        return { success: true, message: "calling u rn" };
     } catch (err: any) {
         const errorMsg = err?.response?.data?.detail || err?.response?.data?.message || err.message;
         console.error("ElevenLabs call failed:", errorMsg);
