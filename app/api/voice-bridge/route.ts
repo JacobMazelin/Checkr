@@ -7,13 +7,16 @@ export async function POST(req: NextRequest) {
         const body = await req.json();
         console.log('Received Voice Command:', body);
 
-        // Expect body: { query: "search terms", chat_guid: "..." }
-        if (!body.query) {
-            return NextResponse.json({ error: 'Missing query' }, { status: 400 });
+        // Expect body: { search_query: "search terms" }
+        // User changed schema: "search_query" (string)
+        const query = body.search_query || body.query; // Support both just in case
+
+        if (!query) {
+            return NextResponse.json({ error: 'Missing search_query' }, { status: 400 });
         }
 
-        // Push to queue (Left Push)
-        await kv.lpush('voice_commands', body);
+        // Push to queue (Left Push) - Normalize to internal format
+        await kv.lpush('voice_commands', { query, chat_guid: body.chat_guid });
 
         return NextResponse.json({ status: 'Command queued' });
     } catch (e: any) {
