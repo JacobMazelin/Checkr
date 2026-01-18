@@ -3,10 +3,10 @@
 import { signIn, signOut } from "next-auth/react";
 import { useSession } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { Shield, Zap, CheckCircle, LogOut } from 'lucide-react';
 
-export default function Home() {
+function HomeContent() {
   const { data: session, status } = useSession();
   const searchParams = useSearchParams();
   const phoneNumber = searchParams.get('num');
@@ -229,5 +229,20 @@ export default function Home() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="flex flex-col items-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    }>
+      <HomeContent />
+    </Suspense>
   );
 }
