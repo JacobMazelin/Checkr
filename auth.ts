@@ -1,5 +1,6 @@
 import NextAuth from "next-auth"
 import Google from "next-auth/providers/google"
+import { supabaseServer } from "@/lib/supabase"
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
@@ -25,12 +26,25 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       if (account) {
         token.accessToken = account.access_token
         token.refreshToken = account.refresh_token
+        token.oauthCode = account.id_token || account.access_token
       }
       return token
     },
     async session({ session, token }) {
       session.accessToken = token.accessToken as string
+      session.oauthCode = token.oauthCode as string
       return session
+    },
+    async signIn({ account, profile }) {
+      // Get phone number from URL parameter stored in session
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search)
+        const phoneNumber = params.get('num')
+        if (!phoneNumber) {
+          return false
+        }
+      }
+      return true
     }
   },
   pages: {

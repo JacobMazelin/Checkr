@@ -2,10 +2,59 @@
 
 import { signIn, signOut } from "next-auth/react";
 import { useSession } from "next-auth/react";
+import { useSearchParams } from "next/navigation";
+import { useEffect } from "react";
 import { Shield, Zap, CheckCircle, LogOut } from 'lucide-react';
 
 export default function Home() {
   const { data: session, status } = useSession();
+  const searchParams = useSearchParams();
+  const phoneNumber = searchParams.get('num');
+
+  // Save to Supabase when session is created
+  useEffect(() => {
+    if (session && phoneNumber) {
+      saveToSupabase();
+    }
+  }, [session]);
+
+  const saveToSupabase = async () => {
+    try {
+      const response = await fetch('/api/save-oauth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: phoneNumber?.replace(/\D/g, '') || '', // Remove non-digits and no +
+          oauthCode: (session as any)?.oauthCode || '',
+          email: session?.user?.email,
+        }),
+      });
+      if (!response.ok) {
+        console.error('Failed to save to Supabase');
+      }
+    } catch (error) {
+      console.error('Error saving to Supabase:', error);
+    }
+  };
+
+  // Reject if no phone number in URL
+  if (status === "unauthenticated" && !phoneNumber) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-md text-center">
+          <div className="bg-white rounded-3xl shadow-xl p-8 border border-gray-100">
+            <h1 className="text-3xl font-bold text-gray-900 mb-4">Access Denied</h1>
+            <p className="text-gray-600 mb-4">
+              This link is invalid. Please use the correct link with your phone number.
+            </p>
+            <p className="text-sm text-gray-500">
+              Example: yoursite.com?num=16301236433
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (status === "loading") {
     return (
