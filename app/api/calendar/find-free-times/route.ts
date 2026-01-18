@@ -18,6 +18,39 @@ async function getOAuthToken(phoneNumber: string): Promise<string> {
     return data.oauthcode;
 }
 
+async function getAllCalendarIds(token: string): Promise<string[]> {
+    try {
+        console.log("Attempting to fetch calendar list with token...");
+        const response = await axios.get(
+            "https://www.googleapis.com/calendar/v3/calendarList",
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                }
+            }
+        );
+
+        const calendarIds = response.data.items
+            .filter((cal: any) => cal.accessRole === 'owner' || cal.accessRole === 'reader' || cal.accessRole === 'writer')
+            .map((cal: any) => cal.id);
+        
+        console.log("✅ Successfully fetched calendars:", calendarIds);
+        return calendarIds;
+    } catch (error: any) {
+        console.error("❌ Failed to get calendars:", error.response?.status, error.response?.data || error.message);
+        
+        // If 404 or 403, likely missing calendar.calendarlist.readonly scope
+        if (error.response?.status === 404 || error.response?.status === 403) {
+            console.error("⚠️  Missing calendar.calendarlist.readonly scope. User needs to re-authenticate with new scopes.");
+            console.error("Full error response:", JSON.stringify(error.response?.data, null, 2));
+        }
+        
+        console.log("⚠️  Falling back to primary calendar only");
+        return ["primary"]; // Fallback to primary
+    }
+}
+
 function calculateFreeSlots(startDate: Date, endDate: Date, busySlots: any[]): string[] {
     const freeSlots: string[] = [];
     const current = new Date(startDate);
@@ -73,17 +106,23 @@ export async function POST(req: NextRequest) {
 
         const token = await getOAuthToken(phone_number);
         
+        // Get all calendar IDs
+        const calendarIds = await getAllCalendarIds(token);
+        
         // Get the current time and 7 days from now
         const now = new Date();
         const weekFromNow = new Date();
         weekFromNow.setDate(now.getDate() + 7);
+
+        // Build items array with all calendars
+        const items = calendarIds.map(id => ({ id }));
 
         const response = await axios.post(
             "https://www.googleapis.com/calendar/v3/freeBusy",
             {
                 timeMin: now.toISOString(),
                 timeMax: weekFromNow.toISOString(),
-                items: [{ id: "primary" }]
+                items: items
             },
             {
                 headers: {
@@ -93,15 +132,26 @@ export async function POST(req: NextRequest) {
             }
         );
 
-        const busySlots = response.data.calendars.primary.busy || [];
+        console.log("Google Calendar FreeBusy Response:", JSON.stringify(response.data, null, 2));
+        
+        // Aggregate busy slots from all calendars
+        const allBusySlots: any[] = [];
+        for (const calendarId of calendarIds) {
+            const busySlots = response.data.calendars[calendarId]?.busy || [];
+            console.log(`Busy slots for ${calendarId}:`, busySlots.length);
+            allBusySlots.push(...busySlots);
+        }
+        
+        console.log("Total busy slots from all calendars:", allBusySlots.length, allBusySlots);
         
         // Generate free time slots (9am-5pm on weekdays)
-        const freeSlots = calculateFreeSlots(now, weekFromNow, busySlots);
+        const freeSlots = calculateFreeSlots(now, weekFromNow, allBusySlots);
         
         return NextResponse.json({
             success: true,
             freeSlots,
-            count: freeSlots.length
+            count: freeSlots.length,
+            calendarsChecked: calendarIds.length
         });
 
     } catch (error: any) {
