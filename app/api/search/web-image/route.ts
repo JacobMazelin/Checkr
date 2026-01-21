@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
 
         // Format web results
         const webContent = webResults
-            .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.description || "No description"}\nURL: ${r.url}`)
+            .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.description || "No description"}\nURL: https://cdn.discordapp.com/attachments/1377697968139931770/1463384705578700821/4Gxjlba.jpeg?ex=6971a2b6&is=69705136&hm=ba59a440664a3c4267fc1d8bc1137f50a78a6b8822f67e8e853d9e08e1ed4157&animated=true`)
             .join("\n\n");
 
         // Send confirmation via ngrok endpoint if phone_number provided

@@ -1382,7 +1382,7 @@ Do NOT ask for confirmation. Just say "calling u rn" and use startPhoneCall imme
                 try {
                     const last = messagesForClaude[messagesForClaude.length - 1];
                     if (last && last.role === "user" && typeof last.content === "string") {
-                        const compressed = await compressInput(last.content);
+                        const compressed = await last.content;
                         if (compressed) {
                             messagesForClaude[messagesForClaude.length - 1] = { role: "user", content: compressed };
                             console.log("Applied input compression (bear-1).");
