@@ -147,6 +147,22 @@ export async function POST(req: NextRequest) {
         // Generate free time slots (9am-5pm on weekdays)
         const freeSlots = calculateFreeSlots(now, weekFromNow, allBusySlots);
         
+        // Send confirmation via ngrok endpoint
+        try {
+            const topSlots = freeSlots.slice(0, 10); // Send first 10 slots
+            const confirmationMessage = `📅 Found ${freeSlots.length} free time slots in the next 7 days:\n\n${topSlots.join('\n')}${freeSlots.length > 10 ? '\n\n...and more' : ''}`;
+            await axios.post('https://proinvestment-drusilla-fortunately.ngrok-free.dev/api/calendar/send-confirmation', {
+                phone_number,
+                message: confirmationMessage
+            }, {
+                timeout: 5000
+            });
+            console.log('[Find Free Times] Confirmation sent via iMessage');
+        } catch (confirmError: any) {
+            console.error('[Find Free Times] Failed to send confirmation:', confirmError.message);
+            // Don't fail the request if confirmation fails
+        }
+        
         return NextResponse.json({
             success: true,
             freeSlots,

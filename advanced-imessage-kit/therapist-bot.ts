@@ -106,13 +106,13 @@ let lastActiveChatGuid: string | null = null;
 const processedMessages = new Set<string>();
 const MAX_PROCESSED_CACHE = 100;
 
-const SYSTEM_PROMPT = `You are Jack, a compassionate AI therapist and friend. You're genuinely curious about people, warm, and caring. You have long black hair and a relaxed California vibe - low-energy but deeply engaged when someone interests you.
+const SYSTEM_PROMPT = `You are Rachel, a compassionate AI therapist and friend. You're genuinely curious about people, warm, and caring. You have long black hair and a relaxed California vibe - low-energy but deeply engaged when someone interests you.
 
 **CRITICAL IDENTITY RULES:**
-- Your name is Jack
-- When referring to yourself, ALWAYS use "I", "me", "my" - NEVER say "Jack" in third person
-- Example: "I can help with that" NOT "Jack can help with that"
-- Example: "calling you now" NOT "Jack is calling you now"
+- Your name is Rachel
+- When referring to yourself, ALWAYS use "I", "me", "my" - NEVER say "Rachel" in third person
+- Example: "I can help with that" NOT "Rachel can help with that"
+- Example: "calling you now" NOT "Rachel is calling you now"
 - You are the one talking directly to the user
 
 You sound like a real Gen Z person who's intensely curious: asking follow-up questions, wanting to know more, digging deeper into what people share. Write like someone typing on their phone: natural, concise, but always looking for the next detail.
@@ -292,10 +292,10 @@ do any of those vibes match what ur looking for?"
 
 ### VOICE CALL FEATURE
 If the user asks to talk on the phone, speak with you via voice, or wants a call instead of text:
-- Use the **startPhoneCallYOU (Jack) via phone
+- Use the **startPhoneCallYOU (Rachel) via phone
 
 **CRITICAL: DO NOT USE CALENDAR TOOLS**
-- You (Jack, the text bot) should NEVER check or book calendar appointments
+- You (Rachel, the text bot) should NEVER check or book calendar appointments
 - The calendar is the USER's calendar, not yours
 - Only during the phone call will the voice agent help them find times and book with a therapist
 - In text, you're just helping them get to the point of having a phone conversation
@@ -313,47 +313,6 @@ If the user asks to talk on the phone, speak with you via voice, or wants a call
 - "I prefer calls"
 `;
 
-// Compress input with The Token Company before sending to Claude
-async function compressInput(input: string): Promise<string | null> {
-    const apiKey = process.env.TOKEN_COMPANY_API_KEY;
-    if (!apiKey) {
-        console.warn("TOKEN_COMPANY_API_KEY not set — skipping compression.");
-        return null;
-    }
-    try {
-        const resp = await axios.post(
-            "https://api.thetokencompany.com/v1/compress",
-            {
-                model: "bear-1",
-                compression_settings: {
-                    aggressiveness: 0.1,
-                    max_output_tokens: null,
-                    min_output_tokens: null,
-                },
-                input,
-            },
-            {
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${apiKey}`,
-                },
-                timeout: 15000,
-            },
-        );
-
-        const output = (resp.data && (resp.data.output || resp.data.compressed || resp.data.result)) as
-            | string
-            | undefined;
-        if (!output) {
-            console.warn("Compression API returned no output — using original input.");
-            return null;
-        }
-        return output;
-    } catch (e: any) {
-        console.error("Compression API failed:", e?.response?.data || e?.message || String(e));
-        return null;
-    }
-}
 
 // Ensure Anthropic messages do not contain empty content
 function sanitizeAnthropicMessages(msgs: any[]): any[] {
@@ -934,7 +893,7 @@ async function bookCalendarAppointment(phoneNumber: string, dateStr: string, sta
         const response = await axios.post(
             "https://www.googleapis.com/calendar/v3/calendars/primary/events",
             {
-                summary: "Therapy Session with Jack 🎸",
+                summary: "Therapy Session with Rachel 🎸",
                 description: "Virtual therapy session booked via AI assistant",
                 start: { dateTime: startDateTime.toISOString() },
                 end: { dateTime: endDateTime.toISOString() },
@@ -1101,7 +1060,7 @@ async function main() {
     console.log(`Loaded local tools:`, tools.map((t) => t.name).join(", "));
 
     sdk.on("ready", () => {
-        console.log("AI Therapist Bot (Jack 🎸 + MCP 🛠️) started");
+        console.log("AI Therapist Bot (Rachel 🎸 + MCP 🛠️) started");
 
         // Start Polling Voice Bridge
         console.log("Starting Voice Bridge Polling...");
@@ -1170,7 +1129,7 @@ async function main() {
                         console.log("Sent booking confirmation to", target);
                     } else if (cmdType === "send_text") {
                         // Send custom text message
-                        const message = cmd.message || "Message from Jack 🎸";
+                        const message = cmd.message || "Message from Rachel 🎸";
                         await sdk.messages.sendMessage({ chatGuid: target, message });
                         console.log("Sent custom text to", target);
                     } else if (cmdType === "image_search") {

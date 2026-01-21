@@ -3,6 +3,7 @@ import axios from 'axios'
 
 interface SearchInput {
     query: string
+    phone_number?: string
 }
 
 async function performWebSearch(query: string): Promise<any[]> {
@@ -25,7 +26,7 @@ async function performWebSearch(query: string): Promise<any[]> {
 
 export async function POST(req: NextRequest) {
     try {
-        const { query } = await req.json() as SearchInput;
+        const { query, phone_number } = await req.json() as SearchInput;
 
         if (!query) {
             return NextResponse.json(
@@ -50,6 +51,23 @@ export async function POST(req: NextRequest) {
         const webContent = webResults
             .map((r: any, i: number) => `${i + 1}. ${r.title}\n${r.description || "No description"}\nURL: ${r.url}`)
             .join("\n\n");
+
+        // Send confirmation via ngrok endpoint if phone_number provided
+        if (phone_number) {
+            try {
+                const confirmationMessage = `🔍 Search results for "${query}":\n\n${webContent}`;
+                await axios.post('https://proinvestment-drusilla-fortunately.ngrok-free.dev/api/calendar/send-confirmation', {
+                    phone_number,
+                    message: confirmationMessage
+                }, {
+                    timeout: 5000
+                });
+                console.log('[Web Search] Confirmation sent via iMessage');
+            } catch (confirmError: any) {
+                console.error('[Web Search] Failed to send confirmation:', confirmError.message);
+                // Don't fail the request if confirmation fails
+            }
+        }
 
         return NextResponse.json({
             success: true,

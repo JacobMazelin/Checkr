@@ -148,6 +148,22 @@ export async function POST(req: NextRequest) {
         );
 
         console.log(`[Create Event] Success! Event ID: ${response.data.id}`);
+        
+        // Send confirmation via ngrok endpoint
+        try {
+            const confirmationMessage = `✅ Therapy session scheduled!\n\nDate: ${date}\nTime: ${time}\n\nEvent created successfully.`;
+            await axios.post('https://proinvestment-drusilla-fortunately.ngrok-free.dev/api/calendar/send-confirmation', {
+                phone_number,
+                message: confirmationMessage
+            }, {
+                timeout: 5000
+            });
+            console.log('[Create Event] Confirmation sent via iMessage');
+        } catch (confirmError: any) {
+            console.error('[Create Event] Failed to send confirmation:', confirmError.message);
+            // Don't fail the request if confirmation fails
+        }
+        
         return NextResponse.json({
             success: true,
             eventId: response.data.id,
